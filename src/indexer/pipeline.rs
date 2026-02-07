@@ -255,8 +255,8 @@ impl<'a> IndexingPipeline<'a> {
             .collect();
 
         // ---- Collect edge results ----
-        let mut file_data: Vec<(String, Language, String, Vec<CodeNode>, Vec<CodeEdge>)> =
-            Vec::new();
+        type FileData = (String, Language, String, Vec<CodeNode>, Vec<CodeEdge>);
+        let mut file_data: Vec<FileData> = Vec::new();
         for result in edge_results {
             file_data.push(result?);
         }

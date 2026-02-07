@@ -474,7 +474,7 @@ impl Extractor {
 /// For deeply nested structures, names are chained: `Outer.Inner.method`.
 /// Standalone functions do NOT get a qualified name even if they appear inside
 /// a container (e.g., a Rust `impl` block function is already marked as Method).
-pub fn populate_qualified_names(nodes: &mut Vec<CodeNode>) {
+pub fn populate_qualified_names(nodes: &mut [CodeNode]) {
     // Build a list of "container" nodes (Class, Interface, Struct, Trait, Enum)
     // with their line ranges for containment testing.
     let containers: Vec<(String, u32, u32)> = nodes

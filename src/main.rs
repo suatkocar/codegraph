@@ -632,38 +632,34 @@ fn cmd_watch(directory: &str) {
     let store = open_store(db_path_buf.to_str().unwrap());
     let pipeline = codegraph::indexer::IndexingPipeline::new(&store);
 
-    loop {
-        match rx.recv() {
-            Ok(first_path) => {
-                // Collect more events within a debounce window.
-                let mut changed: std::collections::HashSet<PathBuf> =
-                    std::collections::HashSet::new();
-                changed.insert(first_path);
+    while let Ok(first_path) = rx.recv() {
+        {
+            // Collect more events within a debounce window.
+            let mut changed: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+            changed.insert(first_path);
 
-                while let Ok(path) = rx.recv_timeout(Duration::from_millis(200)) {
-                    changed.insert(path);
-                }
+            while let Ok(path) = rx.recv_timeout(Duration::from_millis(200)) {
+                changed.insert(path);
+            }
 
-                // Re-index each changed file.
-                for path in &changed {
-                    match pipeline.index_file(path, &root) {
-                        Ok(Some(result)) => {
-                            println!(
-                                "  Re-indexed {} ({} nodes, {} edges) in {}ms",
-                                path.strip_prefix(&root).unwrap_or(path).display(),
-                                result.nodes_created,
-                                result.edges_created,
-                                result.duration_ms,
-                            );
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            eprintln!("  Error re-indexing {}: {}", path.display(), e);
-                        }
+            // Re-index each changed file.
+            for path in &changed {
+                match pipeline.index_file(path, &root) {
+                    Ok(Some(result)) => {
+                        println!(
+                            "  Re-indexed {} ({} nodes, {} edges) in {}ms",
+                            path.strip_prefix(&root).unwrap_or(path).display(),
+                            result.nodes_created,
+                            result.edges_created,
+                            result.duration_ms,
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!("  Error re-indexing {}: {}", path.display(), e);
                     }
                 }
             }
-            Err(_) => break,
         }
     }
 }
