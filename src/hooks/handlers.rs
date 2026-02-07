@@ -80,7 +80,7 @@ pub fn handle_session_start() {
         let db = match ensure_db(&cwd) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[codegraph] session_start: failed to ensure DB dir: {e}");
+                tracing::error!("session_start: failed to ensure DB dir: {e}");
                 emit(json!({"continue": true}));
                 return;
             }
@@ -89,7 +89,7 @@ pub fn handle_session_start() {
         let conn = match crate::db::schema::initialize_database(&db) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("[codegraph] session_start: DB init failed: {e}");
+                tracing::error!("session_start: DB init failed: {e}");
                 emit(json!({"continue": true}));
                 return;
             }
@@ -118,18 +118,18 @@ pub fn handle_session_start() {
                     "CodeGraph: indexed {} files ({} nodes, {} edges) in {}ms",
                     result.files_indexed, stats.nodes, stats.edges, elapsed,
                 );
-                eprintln!("[codegraph] {message}");
+                tracing::info!("{message}");
                 emit(json!({"continue": true, "message": message}));
             }
             Err(e) => {
-                eprintln!("[codegraph] session_start: indexing failed: {e}");
+                tracing::error!("session_start: indexing failed: {e}");
                 emit(json!({"continue": true}));
             }
         }
     });
 
     if result.is_err() {
-        eprintln!("[codegraph] session_start: caught panic");
+        tracing::error!("session_start: caught panic");
         emit(json!({"continue": true}));
     }
 }
@@ -199,15 +199,15 @@ pub fn handle_prompt_submit() {
             return;
         }
 
-        eprintln!(
-            "[codegraph] prompt_submit: injecting {} chars of context",
+        tracing::info!(
+            "prompt_submit: injecting {} chars of context",
             context.len()
         );
         emit(json!({"continue": true, "additionalContext": context}));
     });
 
     if result.is_err() {
-        eprintln!("[codegraph] prompt_submit: caught panic");
+        tracing::error!("prompt_submit: caught panic");
         emit(json!({"continue": true}));
     }
 }
@@ -298,15 +298,15 @@ pub fn handle_pre_compact() {
             stats.edges,
         );
 
-        eprintln!(
-            "[codegraph] pre_compact: preserving {} symbols across compaction",
+        tracing::info!(
+            "pre_compact: preserving {} symbols across compaction",
             table_rows.len()
         );
         emit(json!({"continue": true, "message": summary}));
     });
 
     if result.is_err() {
-        eprintln!("[codegraph] pre_compact: caught panic");
+        tracing::error!("pre_compact: caught panic");
         emit(json!({"continue": true}));
     }
 }
@@ -367,16 +367,16 @@ pub fn handle_post_edit() {
         let path = Path::new(file_path);
         match pipeline.index_file(path, &cwd) {
             Ok(Some(result)) => {
-                eprintln!(
-                    "[codegraph] post_edit: re-indexed {} ({} nodes, {} edges) in {}ms",
+                tracing::info!(
+                    "post_edit: re-indexed {} ({} nodes, {} edges) in {}ms",
                     file_path, result.nodes_created, result.edges_created, result.duration_ms,
                 );
             }
             Ok(None) => {
-                eprintln!("[codegraph] post_edit: skipped {file_path} (unsupported or too large)");
+                tracing::info!("post_edit: skipped {file_path} (unsupported or too large)");
             }
             Err(e) => {
-                eprintln!("[codegraph] post_edit: failed to re-index {file_path}: {e}");
+                tracing::error!("post_edit: failed to re-index {file_path}: {e}");
             }
         }
 
@@ -384,7 +384,7 @@ pub fn handle_post_edit() {
     });
 
     if result.is_err() {
-        eprintln!("[codegraph] post_edit: caught panic");
+        tracing::error!("post_edit: caught panic");
         emit(json!({"continue": true, "suppressOutput": true}));
     }
 }
@@ -513,8 +513,8 @@ pub fn handle_pre_tool_use() {
             return;
         }
 
-        eprintln!(
-            "[codegraph] pre_tool_use: injecting {} chars for {}",
+        tracing::info!(
+            "pre_tool_use: injecting {} chars for {}",
             context.len(),
             tool_name
         );
@@ -522,7 +522,7 @@ pub fn handle_pre_tool_use() {
     });
 
     if result.is_err() {
-        eprintln!("[codegraph] pre_tool_use: caught panic");
+        tracing::error!("pre_tool_use: caught panic");
         emit(json!({"continue": true}));
     }
 }
@@ -611,15 +611,15 @@ pub fn handle_subagent_start() {
 
         overview.push_str("\nUse CodeGraph MCP tools (codegraph_query, codegraph_callers, etc.) for code navigation.\n");
 
-        eprintln!(
-            "[codegraph] subagent_start: injecting {} chars of project context",
+        tracing::info!(
+            "subagent_start: injecting {} chars of project context",
             overview.len()
         );
         emit(json!({"continue": true, "additionalContext": overview}));
     });
 
     if result.is_err() {
-        eprintln!("[codegraph] subagent_start: caught panic");
+        tracing::error!("subagent_start: caught panic");
         emit(json!({"continue": true}));
     }
 }
@@ -746,8 +746,8 @@ pub fn handle_post_tool_failure() {
             return;
         }
 
-        eprintln!(
-            "[codegraph] post_tool_failure: injecting {} chars of corrective context for {}",
+        tracing::info!(
+            "post_tool_failure: injecting {} chars of corrective context for {}",
             context.len(),
             tool_name
         );
@@ -755,7 +755,7 @@ pub fn handle_post_tool_failure() {
     });
 
     if result.is_err() {
-        eprintln!("[codegraph] post_tool_failure: caught panic");
+        tracing::error!("post_tool_failure: caught panic");
         emit(json!({"continue": true}));
     }
 }
@@ -816,7 +816,7 @@ pub fn handle_stop() {
                 stats.nodes,
                 (unresolved as f64 / stats.nodes as f64) * 100.0,
             );
-            eprintln!("[codegraph] stop: high unresolved refs, suggesting continue");
+            tracing::warn!("stop: high unresolved refs, suggesting continue");
             emit(json!({"stop": false, "message": message}));
         } else {
             emit(json!({"stop": true}));
@@ -824,7 +824,7 @@ pub fn handle_stop() {
     });
 
     if result.is_err() {
-        eprintln!("[codegraph] stop: caught panic");
+        tracing::error!("stop: caught panic");
         emit(json!({"stop": true}));
     }
 }
@@ -892,19 +892,19 @@ pub fn handle_task_completed() {
         }
 
         if issues.is_empty() {
-            eprintln!("[codegraph] task_completed: quality gate passed");
+            tracing::info!("task_completed: quality gate passed");
             emit(
                 json!({"continue": true, "message": "CodeGraph: quality gate passed — no dead code or unresolved refs."}),
             );
         } else {
             let message = format!("CodeGraph quality gate:\n{}", issues.join("\n"));
-            eprintln!("[codegraph] task_completed: {} issues found", issues.len());
+            tracing::warn!("task_completed: {} issues found", issues.len());
             emit(json!({"continue": true, "message": message}));
         }
     });
 
     if result.is_err() {
-        eprintln!("[codegraph] task_completed: caught panic");
+        tracing::error!("task_completed: caught panic");
         emit(json!({"continue": true}));
     }
 }
@@ -968,8 +968,8 @@ pub fn handle_session_end() {
             Err(_) => 0,
         };
 
-        eprintln!(
-            "[codegraph] session_end: final index — {} files in {}ms \
+        tracing::info!(
+            "session_end: final index -- {} files in {}ms \
              (total: {} files, {} nodes, {} edges, {} unresolved)",
             files_indexed, elapsed, stats.files, stats.nodes, stats.edges, unresolved,
         );
@@ -978,7 +978,7 @@ pub fn handle_session_end() {
     });
 
     if result.is_err() {
-        eprintln!("[codegraph] session_end: caught panic");
+        tracing::error!("session_end: caught panic");
         emit(json!({"continue": true}));
     }
 }

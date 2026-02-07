@@ -138,6 +138,7 @@ enum Commands {
 }
 
 fn main() {
+    codegraph::observability::init_logging();
     let cli = Cli::parse();
 
     match cli.command {
@@ -219,7 +220,7 @@ fn main() {
 
 fn open_store(db_path: &str) -> GraphStore {
     let conn = initialize_database(db_path).unwrap_or_else(|e| {
-        eprintln!("Error: cannot open database: {}", e);
+        tracing::error!("cannot open database: {}", e);
         process::exit(1);
     });
     GraphStore::from_connection(conn)
@@ -231,7 +232,7 @@ fn cmd_init(directory: &str, non_interactive: bool) {
 
     // Step 2: Resolve project directory
     let root = PathBuf::from(directory).canonicalize().unwrap_or_else(|e| {
-        eprintln!("Error: cannot resolve directory '{}': {}", directory, e);
+        tracing::error!("cannot resolve directory '{}': {}", directory, e);
         process::exit(1);
     });
     let root_str = root.to_string_lossy().to_string();
@@ -307,7 +308,7 @@ fn cmd_init(directory: &str, non_interactive: bool) {
     if is_git && installer::confirm("Install git post-commit hook?", non_interactive) {
         match codegraph::hooks::git_hooks::install_git_post_commit_hook(directory) {
             Ok(()) => git_hook_installed = true,
-            Err(e) => eprintln!("  Warning: git hook install failed: {}", e),
+            Err(e) => tracing::warn!("git hook install failed: {}", e),
         }
     }
 
@@ -346,7 +347,7 @@ fn cmd_init(directory: &str, non_interactive: bool) {
 
 fn cmd_install_hooks(directory: &str) {
     let root = PathBuf::from(directory).canonicalize().unwrap_or_else(|e| {
-        eprintln!("Error: cannot resolve directory '{}': {}", directory, e);
+        tracing::error!("cannot resolve directory '{}': {}", directory, e);
         process::exit(1);
     });
 
@@ -356,22 +357,22 @@ fn cmd_install_hooks(directory: &str) {
         .unwrap_or_else(|_| "codegraph".to_string());
 
     codegraph::hooks::install::install_hooks(&root, &binary_path).unwrap_or_else(|e| {
-        eprintln!("Error: failed to install hooks: {}", e);
+        tracing::error!("failed to install hooks: {}", e);
         process::exit(1);
     });
 
-    eprintln!("[codegraph] Hooks installed in {}", root.display());
+    tracing::info!("Hooks installed in {}", root.display());
 }
 
 fn cmd_index(directory: &str, force: bool) {
     let root = PathBuf::from(directory).canonicalize().unwrap_or_else(|e| {
-        eprintln!("Error: cannot resolve directory '{}': {}", directory, e);
+        tracing::error!("cannot resolve directory '{}': {}", directory, e);
         process::exit(1);
     });
 
     let db_dir = root.join(".codegraph");
     std::fs::create_dir_all(&db_dir).unwrap_or_else(|e| {
-        eprintln!("Error: cannot create .codegraph directory: {}", e);
+        tracing::error!("cannot create .codegraph directory: {}", e);
         process::exit(1);
     });
 
@@ -385,7 +386,7 @@ fn cmd_index(directory: &str, force: bool) {
             incremental: !force,
         })
         .unwrap_or_else(|e| {
-            eprintln!("Error: indexing failed: {}", e);
+            tracing::error!("indexing failed: {}", e);
             process::exit(1);
         });
 
@@ -427,7 +428,7 @@ fn cmd_query(query: &str, limit: usize) {
             }
         }
         Err(e) => {
-            eprintln!("Error: search failed: {}", e);
+            tracing::error!("search failed: {}", e);
             process::exit(1);
         }
     }
@@ -451,8 +452,8 @@ fn cmd_impact(target: &str, db_path: &str) {
 fn cmd_serve(db_path: &str) {
     let db = PathBuf::from(db_path);
     if !db.exists() {
-        eprintln!("Error: database not found at '{}'", db_path);
-        eprintln!("Run `codegraph index <dir>` first to create an index.");
+        tracing::error!("database not found at '{}'", db_path);
+        tracing::error!("Run `codegraph index <dir>` first to create an index.");
         process::exit(1);
     }
 
@@ -463,13 +464,13 @@ fn cmd_serve(db_path: &str) {
         .enable_all()
         .build()
         .unwrap_or_else(|e| {
-            eprintln!("Error: cannot create async runtime: {}", e);
+            tracing::error!("cannot create async runtime: {}", e);
             process::exit(1);
         });
 
     rt.block_on(async {
         if let Err(e) = codegraph::mcp::server::run_server(store).await {
-            eprintln!("Error: MCP server failed: {}", e);
+            tracing::error!("MCP server failed: {}", e);
             process::exit(1);
         }
     });
@@ -555,20 +556,20 @@ fn cmd_git_hooks(action: &str, directory: &str) {
     match action {
         "install" => {
             if let Err(e) = codegraph::hooks::git_hooks::install_git_post_commit_hook(directory) {
-                eprintln!("Error: {}", e);
+                tracing::error!("{}", e);
                 process::exit(1);
             }
             println!("Git post-commit hook installed.");
         }
         "uninstall" => {
             if let Err(e) = codegraph::hooks::git_hooks::uninstall_git_post_commit_hook(directory) {
-                eprintln!("Error: {}", e);
+                tracing::error!("{}", e);
                 process::exit(1);
             }
             println!("Git post-commit hook removed.");
         }
         other => {
-            eprintln!("Unknown action '{}'. Use 'install' or 'uninstall'.", other);
+            tracing::error!("Unknown action '{}'. Use 'install' or 'uninstall'.", other);
             process::exit(1);
         }
     }
@@ -576,14 +577,14 @@ fn cmd_git_hooks(action: &str, directory: &str) {
 
 fn cmd_watch(directory: &str) {
     let root = PathBuf::from(directory).canonicalize().unwrap_or_else(|e| {
-        eprintln!("Error: cannot resolve directory '{}': {}", directory, e);
+        tracing::error!("cannot resolve directory '{}': {}", directory, e);
         process::exit(1);
     });
 
     // Ensure DB exists — run initial index if needed.
     let db_dir = root.join(".codegraph");
     std::fs::create_dir_all(&db_dir).unwrap_or_else(|e| {
-        eprintln!("Error: cannot create .codegraph directory: {}", e);
+        tracing::error!("cannot create .codegraph directory: {}", e);
         process::exit(1);
     });
     let db_path_buf = db_dir.join("codegraph.db");
@@ -617,14 +618,14 @@ fn cmd_watch(directory: &str) {
         }
     })
     .unwrap_or_else(|e| {
-        eprintln!("Error: cannot create file watcher: {}", e);
+        tracing::error!("cannot create file watcher: {}", e);
         process::exit(1);
     });
 
     watcher
         .watch(&root, RecursiveMode::Recursive)
         .unwrap_or_else(|e| {
-            eprintln!("Error: cannot watch directory: {}", e);
+            tracing::error!("cannot watch directory: {}", e);
             process::exit(1);
         });
 
@@ -656,7 +657,7 @@ fn cmd_watch(directory: &str) {
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        eprintln!("  Error re-indexing {}: {}", path.display(), e);
+                        tracing::error!("re-indexing {}: {}", path.display(), e);
                     }
                 }
             }
@@ -667,14 +668,14 @@ fn cmd_watch(directory: &str) {
 fn cmd_stats(db_path: &str) {
     let db = PathBuf::from(db_path);
     if !db.exists() {
-        eprintln!("Error: database not found at '{}'", db_path);
-        eprintln!("Run `codegraph index <dir>` first to create an index.");
+        tracing::error!("database not found at '{}'", db_path);
+        tracing::error!("Run `codegraph index <dir>` first to create an index.");
         process::exit(1);
     }
 
     let store = open_store(db_path);
     let stats = store.get_stats().unwrap_or_else(|e| {
-        eprintln!("Error: cannot read stats: {}", e);
+        tracing::error!("cannot read stats: {}", e);
         process::exit(1);
     });
 

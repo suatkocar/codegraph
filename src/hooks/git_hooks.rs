@@ -49,7 +49,7 @@ pub fn install_git_post_commit_hook(project_dir: &str) -> Result<()> {
 
         // Already installed — nothing to do.
         if content.contains(MARKER) {
-            eprintln!("[codegraph] post-commit hook already installed.");
+            tracing::info!("post-commit hook already installed.");
             return Ok(());
         }
 
@@ -63,8 +63,8 @@ pub fn install_git_post_commit_hook(project_dir: &str) -> Result<()> {
     }
 
     fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))?;
-    eprintln!(
-        "[codegraph] Installed post-commit hook at {}",
+    tracing::info!(
+        "Installed post-commit hook at {}",
         hook_path.display()
     );
     Ok(())
@@ -104,11 +104,11 @@ pub fn uninstall_git_post_commit_hook(project_dir: &str) -> Result<()> {
 
     if meaningful.is_empty() {
         fs::remove_file(&hook_path)?;
-        eprintln!("[codegraph] Removed post-commit hook (file deleted).");
+        tracing::info!("Removed post-commit hook (file deleted).");
     } else {
         let cleaned = filtered.join("\n");
         fs::write(&hook_path, format!("{}\n", cleaned.trim_end()))?;
-        eprintln!("[codegraph] Removed codegraph line from post-commit hook.");
+        tracing::info!("Removed codegraph line from post-commit hook.");
     }
 
     Ok(())

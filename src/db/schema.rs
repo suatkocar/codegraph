@@ -143,8 +143,8 @@ fn load_sqlite_vec_extension() {
 /// fully functional without vector search.
 pub fn create_vec_table(conn: &Connection) {
     if let Err(e) = conn.execute_batch(CREATE_VEC_EMBEDDINGS) {
-        eprintln!(
-            "[codegraph] WARNING: could not create vec_embeddings table \
+        tracing::warn!(
+            "could not create vec_embeddings table \
              (sqlite-vec may not be loaded): {e}"
         );
     }

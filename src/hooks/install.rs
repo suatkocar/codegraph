@@ -45,7 +45,7 @@ pub fn install_hooks(project_dir: &Path, binary_path: &str) -> Result<()> {
     // 3. Merge MCP server entry into .mcp.json
     merge_mcp_config(&mcp_path, binary_path)?;
 
-    eprintln!("[codegraph] Hooks installed successfully.");
+    tracing::info!("Hooks installed successfully.");
     Ok(())
 }
 
@@ -137,7 +137,7 @@ fn write_shell_scripts(hooks_dir: &Path, binary_path: &str) -> Result<()> {
         let body = render_script(hook, binary_path);
         fs::write(&path, body)?;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
-        eprintln!("[codegraph] Wrote {}", path.display());
+        tracing::info!("Wrote {}", path.display());
     }
 
     Ok(())
@@ -233,7 +233,7 @@ fn merge_settings(settings_path: &Path) -> Result<()> {
 
     let pretty = serde_json::to_string_pretty(&root)?;
     fs::write(settings_path, pretty)?;
-    eprintln!("[codegraph] Merged hooks into {}", settings_path.display());
+    tracing::info!("Merged hooks into {}", settings_path.display());
     Ok(())
 }
 
@@ -273,7 +273,7 @@ fn merge_mcp_config(mcp_path: &Path, binary_path: &str) -> Result<()> {
 
     let pretty = serde_json::to_string_pretty(&root)?;
     fs::write(mcp_path, pretty)?;
-    eprintln!("[codegraph] Merged MCP config into {}", mcp_path.display());
+    tracing::info!("Merged MCP config into {}", mcp_path.display());
     Ok(())
 }
 

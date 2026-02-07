@@ -5,7 +5,7 @@
 //! Tarjan's SCC algorithm implemented in Rust (not SQL), matching the
 //! original design decision.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use rusqlite::params;
 
@@ -435,6 +435,89 @@ impl<'a> GraphTraversal<'a> {
 
         Ok(Neighborhood { nodes, edges })
     }
+
+    // -------------------------------------------------------------------
+    // find_call_path
+    // -------------------------------------------------------------------
+
+    /// Find the shortest call path between two functions using BFS.
+    ///
+    /// Returns `None` if no path exists within `max_depth` hops.
+    /// The returned path includes both the source and target nodes.
+    pub fn find_call_path(
+        &self,
+        from_id: &str,
+        to_id: &str,
+        max_depth: u32,
+    ) -> Result<Option<Vec<CodeNode>>> {
+        if from_id == to_id {
+            // Path from a node to itself: return just that node.
+            let node = self.store.conn.query_row(
+                "SELECT * FROM nodes WHERE id = ?1",
+                params![from_id],
+                row_to_code_node,
+            );
+            return match node {
+                Ok(n) => Ok(Some(vec![n])),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            };
+        }
+
+        // BFS: queue holds (node_id, path_of_ids_so_far).
+        let mut queue: VecDeque<(String, Vec<String>)> = VecDeque::new();
+        let mut visited: HashSet<String> = HashSet::new();
+
+        queue.push_back((from_id.to_string(), vec![from_id.to_string()]));
+        visited.insert(from_id.to_string());
+
+        while let Some((current, path)) = queue.pop_front() {
+            // path contains nodes; edges = path.len() - 1.
+            // If we've already used max_depth edges, don't explore further.
+            let edges_used = (path.len() as u32) - 1;
+            if edges_used >= max_depth {
+                continue;
+            }
+
+            // Get direct callees (outgoing "calls" edges).
+            let mut stmt = self.store.conn.prepare_cached(
+                "SELECT target_id FROM edges WHERE source_id = ?1 AND type = 'calls'",
+            )?;
+            let neighbors: Vec<String> = stmt
+                .query_map(params![current], |row| row.get::<_, String>(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            for neighbor in neighbors {
+                if neighbor == to_id {
+                    // Found the target — reconstruct the full path.
+                    let mut full_path = path.clone();
+                    full_path.push(neighbor);
+
+                    // Fetch CodeNode objects for each ID in the path.
+                    let mut nodes = Vec::with_capacity(full_path.len());
+                    for id in &full_path {
+                        let node = self.store.conn.query_row(
+                            "SELECT * FROM nodes WHERE id = ?1",
+                            params![id],
+                            row_to_code_node,
+                        )?;
+                        nodes.push(node);
+                    }
+                    return Ok(Some(nodes));
+                }
+
+                if !visited.contains(&neighbor) {
+                    visited.insert(neighbor.clone());
+                    let mut new_path = path.clone();
+                    new_path.push(neighbor);
+                    queue.push_back((new_path.last().unwrap().clone(), new_path));
+                }
+            }
+        }
+
+        Ok(None)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -825,6 +908,116 @@ mod tests {
         // depending on how the CTE resolves — but the key point is it terminates.
         assert!(!deps.is_empty());
         assert!(deps.iter().any(|d| d.node.id == "y"));
+    }
+
+    // -----------------------------------------------------------------------
+    // 11. find_callers — non-call edges are excluded
+    // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // 12. find_call_path — direct neighbor
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_call_path_direct_neighbor() {
+        let store = setup();
+        seed_linear_chain(&store); // a -> b -> c -> d
+        let traversal = GraphTraversal::new(&store);
+
+        let path = traversal.find_call_path("a", "b", 5).unwrap();
+
+        assert!(path.is_some(), "direct call a->b should have a path");
+        let nodes = path.unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].id, "a");
+        assert_eq!(nodes[1].id, "b");
+    }
+
+    // -----------------------------------------------------------------------
+    // 13. find_call_path — through intermediary
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_call_path_through_intermediary() {
+        let store = setup();
+        seed_linear_chain(&store); // a -> b -> c -> d
+        let traversal = GraphTraversal::new(&store);
+
+        let path = traversal.find_call_path("a", "d", 10).unwrap();
+
+        assert!(path.is_some(), "path a->b->c->d should exist");
+        let nodes = path.unwrap();
+        assert_eq!(nodes.len(), 4);
+        assert_eq!(nodes[0].id, "a");
+        assert_eq!(nodes[1].id, "b");
+        assert_eq!(nodes[2].id, "c");
+        assert_eq!(nodes[3].id, "d");
+    }
+
+    // -----------------------------------------------------------------------
+    // 14. find_call_path — no path exists
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_call_path_no_path() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        // d does not call a (graph is directed)
+        let path = traversal.find_call_path("d", "a", 10).unwrap();
+        assert!(path.is_none(), "no reverse path d->a in a directed graph");
+    }
+
+    // -----------------------------------------------------------------------
+    // 15. find_call_path — same node
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_call_path_same_node() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let path = traversal.find_call_path("b", "b", 5).unwrap();
+
+        assert!(path.is_some(), "path from b to b should be self");
+        let nodes = path.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].id, "b");
+    }
+
+    // -----------------------------------------------------------------------
+    // 16. find_call_path — respects max_depth
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_call_path_respects_max_depth() {
+        let store = setup();
+        seed_linear_chain(&store); // a -> b -> c -> d (3 hops)
+        let traversal = GraphTraversal::new(&store);
+
+        // max_depth=2 should NOT find path a->d (needs 3 hops)
+        let path = traversal.find_call_path("a", "d", 2).unwrap();
+        assert!(path.is_none(), "3-hop path should not be found with max_depth=2");
+
+        // max_depth=3 SHOULD find it
+        let path = traversal.find_call_path("a", "d", 3).unwrap();
+        assert!(path.is_some(), "3-hop path should be found with max_depth=3");
+    }
+
+    // -----------------------------------------------------------------------
+    // 17. find_call_path — nonexistent node
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_call_path_nonexistent_node() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let path = traversal.find_call_path("a", "nonexistent", 10).unwrap();
+        assert!(path.is_none());
     }
 
     // -----------------------------------------------------------------------

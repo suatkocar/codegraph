@@ -14,6 +14,7 @@ pub mod graph;
 pub mod hooks;
 pub mod indexer;
 pub mod mcp;
+pub mod observability;
 pub mod resolution;
 pub mod security;
 pub mod types;

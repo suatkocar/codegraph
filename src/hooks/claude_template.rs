@@ -108,16 +108,16 @@ pub fn generate_claude_md(project_dir: &str, stats: &ProjectStats) -> Result<()>
             // Replace existing section.
             let updated = replace_section(&content, &section);
             fs::write(&path, updated)?;
-            eprintln!("[codegraph] Updated CodeGraph section in CLAUDE.md");
+            tracing::info!("Updated CodeGraph section in CLAUDE.md");
         } else {
             // Append to existing file.
             let appended = format!("{}\n\n{}", content.trim_end(), section);
             fs::write(&path, appended)?;
-            eprintln!("[codegraph] Appended CodeGraph section to CLAUDE.md");
+            tracing::info!("Appended CodeGraph section to CLAUDE.md");
         }
     } else {
         fs::write(&path, &section)?;
-        eprintln!("[codegraph] Created CLAUDE.md with CodeGraph section");
+        tracing::info!("Created CLAUDE.md with CodeGraph section");
     }
 
     Ok(())

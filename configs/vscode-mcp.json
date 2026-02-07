@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "codegraph": {
+      "command": "codegraph",
+      "args": ["serve"]
+    }
+  }
+}
