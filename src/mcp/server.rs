@@ -10,6 +10,7 @@ use rmcp::model::{ServerCapabilities, ServerInfo};
 use rmcp::{tool, ServerHandler, ServiceExt};
 use serde::Serialize;
 
+use crate::context::assembler::ContextAssembler;
 use crate::graph::ranking::GraphRanking;
 use crate::graph::search::{HybridSearch, SearchOptions};
 use crate::graph::store::GraphStore;
@@ -578,7 +579,7 @@ impl CodeGraphServer {
         }
     }
 
-    // 7. codegraph_context — LLM context assembly (stub until Phase 5)
+    // 7. codegraph_context — 4-tier token-budgeted LLM context assembly
     #[tool(
         name = "codegraph_context",
         description = "Assemble optimal context for Claude from the code graph. Uses a tiered approach (core -> near -> extended -> background) to pack the most relevant code within a token budget."
@@ -596,49 +597,10 @@ impl CodeGraphServer {
     ) -> String {
         let store = self.store.lock().unwrap();
         let search = HybridSearch::new(&store.conn);
-        let _budget = budget.unwrap_or(8000).min(100_000);
+        let budget = budget.map(|b| b.min(100_000));
 
-        let opts = SearchOptions {
-            limit: Some(10),
-            ..Default::default()
-        };
-
-        match search.search(&query, &opts) {
-            Ok(results) => {
-                let mut md = String::new();
-                md.push_str(&format!("# Context for: {}\n\n", query));
-
-                if results.is_empty() {
-                    md.push_str("No relevant symbols found in the code graph.\n");
-                    return md;
-                }
-
-                md.push_str("## Core Symbols\n\n");
-                for r in &results {
-                    md.push_str(&format!("### {} ({})\n", r.name, r.kind));
-                    md.push_str(&format!("File: `{}`\n", r.file_path));
-                    if let Some(ref snippet) = r.snippet {
-                        md.push_str(&format!("{}\n", snippet));
-                    }
-                    // Load full node to get body
-                    if let Ok(Some(node)) = store.get_node(&r.node_id) {
-                        if let Some(ref body) = node.body {
-                            let lang = node.language.as_str();
-                            let tag = match lang {
-                                "typescript" | "tsx" => "ts",
-                                "javascript" | "jsx" => "js",
-                                "python" => "py",
-                                _ => lang,
-                            };
-                            md.push_str(&format!("\n```{}\n{}\n```\n\n", tag, body));
-                        }
-                    }
-                }
-
-                md
-            }
-            Err(e) => format!("Error searching: {}", e),
-        }
+        let assembler = ContextAssembler::new(&store.conn, &search);
+        assembler.assemble_context(&query, budget)
     }
 
     // 8. codegraph_diagram — Mermaid diagram generation

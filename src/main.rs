@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 use std::process;
+use std::sync::mpsc;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use notify::{RecursiveMode, Watcher};
 
 use codegraph::cli::installer;
 use codegraph::db::schema::initialize_database;
@@ -120,6 +123,18 @@ enum Commands {
     HookPreCompact,
     /// Internal: PostToolUse hook handler
     HookPostEdit,
+    /// Internal: PreToolUse hook handler
+    HookPreToolUse,
+    /// Internal: SubagentStart hook handler
+    HookSubagentStart,
+    /// Internal: PostToolUseFailure hook handler
+    HookPostToolFailure,
+    /// Internal: Stop hook handler
+    HookStop,
+    /// Internal: TaskCompleted hook handler
+    HookTaskCompleted,
+    /// Internal: SessionEnd hook handler
+    HookSessionEnd,
 }
 
 fn main() {
@@ -142,8 +157,7 @@ fn main() {
             cmd_impact(&target, &db);
         }
         Commands::Watch { directory } => {
-            println!("Watch: {directory}");
-            // TODO: Phase 6 — notify-based incremental re-index
+            cmd_watch(&directory);
         }
         Commands::Serve { db } => {
             cmd_serve(&db);
@@ -177,6 +191,24 @@ fn main() {
         }
         Commands::HookPostEdit => {
             codegraph::hooks::handlers::handle_post_edit();
+        }
+        Commands::HookPreToolUse => {
+            codegraph::hooks::handlers::handle_pre_tool_use();
+        }
+        Commands::HookSubagentStart => {
+            codegraph::hooks::handlers::handle_subagent_start();
+        }
+        Commands::HookPostToolFailure => {
+            codegraph::hooks::handlers::handle_post_tool_failure();
+        }
+        Commands::HookStop => {
+            codegraph::hooks::handlers::handle_stop();
+        }
+        Commands::HookTaskCompleted => {
+            codegraph::hooks::handlers::handle_task_completed();
+        }
+        Commands::HookSessionEnd => {
+            codegraph::hooks::handlers::handle_session_end();
         }
     }
 }
@@ -294,9 +326,9 @@ fn cmd_init(directory: &str, non_interactive: bool) {
                 edges: 0,
             });
         let proj_stats = codegraph::hooks::claude_template::ProjectStats {
+            languages: lang_sorted.iter().cloned().collect(),
             total_nodes: s.nodes,
             total_edges: s.edges,
-            ..Default::default()
         };
         if codegraph::hooks::claude_template::generate_claude_md(directory, &proj_stats)
             .is_ok()
@@ -546,6 +578,103 @@ fn cmd_git_hooks(action: &str, directory: &str) {
         other => {
             eprintln!("Unknown action '{}'. Use 'install' or 'uninstall'.", other);
             process::exit(1);
+        }
+    }
+}
+
+fn cmd_watch(directory: &str) {
+    let root = PathBuf::from(directory).canonicalize().unwrap_or_else(|e| {
+        eprintln!("Error: cannot resolve directory '{}': {}", directory, e);
+        process::exit(1);
+    });
+
+    // Ensure DB exists — run initial index if needed.
+    let db_dir = root.join(".codegraph");
+    std::fs::create_dir_all(&db_dir).unwrap_or_else(|e| {
+        eprintln!("Error: cannot create .codegraph directory: {}", e);
+        process::exit(1);
+    });
+    let db_path_buf = db_dir.join("codegraph.db");
+
+    if !db_path_buf.exists() {
+        println!("No index found. Running initial index...");
+        cmd_index(directory, false);
+    }
+
+    println!(
+        "Watching {} for changes (Ctrl+C to stop)...",
+        root.display()
+    );
+
+    let (tx, rx) = mpsc::channel();
+
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if let Ok(event) = res {
+            // Only react to file modifications and creations.
+            use notify::EventKind;
+            match event.kind {
+                EventKind::Modify(_) | EventKind::Create(_) => {
+                    for path in &event.paths {
+                        if codegraph::indexer::CodeParser::is_supported(
+                            &path.to_string_lossy(),
+                        ) {
+                            let _ = tx.send(path.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    })
+    .unwrap_or_else(|e| {
+        eprintln!("Error: cannot create file watcher: {}", e);
+        process::exit(1);
+    });
+
+    watcher
+        .watch(&root, RecursiveMode::Recursive)
+        .unwrap_or_else(|e| {
+            eprintln!("Error: cannot watch directory: {}", e);
+            process::exit(1);
+        });
+
+    // Debounce: collect events for 200ms then re-index changed files.
+    let store = open_store(db_path_buf.to_str().unwrap());
+    let pipeline = codegraph::indexer::IndexingPipeline::new(&store);
+
+    loop {
+        match rx.recv() {
+            Ok(first_path) => {
+                // Collect more events within a debounce window.
+                let mut changed: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+                changed.insert(first_path);
+
+                while let Ok(path) = rx.recv_timeout(Duration::from_millis(200)) {
+                    changed.insert(path);
+                }
+
+                // Re-index each changed file.
+                for path in &changed {
+                    match pipeline.index_file(path, &root) {
+                        Ok(Some(result)) => {
+                            println!(
+                                "  Re-indexed {} ({} nodes, {} edges) in {}ms",
+                                path.strip_prefix(&root)
+                                    .unwrap_or(path)
+                                    .display(),
+                                result.nodes_created,
+                                result.edges_created,
+                                result.duration_ms,
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            eprintln!("  Error re-indexing {}: {}", path.display(), e);
+                        }
+                    }
+                }
+            }
+            Err(_) => break,
         }
     }
 }

@@ -51,11 +51,29 @@ The SessionStart hook triggers an incremental re-index (~12ms when nothing chang
 ### On every prompt you send
 The UserPromptSubmit hook searches the graph for context relevant to your message and injects it automatically. The agent sees the right code before it even starts thinking.
 
+### Before every tool call
+The PreToolUse hook injects relevant codebase context before Edit, Write, Read, Grep, Glob, and Bash calls. The agent knows which symbols are in the file before it even opens it.
+
 ### On every file Claude edits
 The PostToolUse hook re-indexes the modified file instantly. The graph stays in sync with changes as they happen.
 
+### When a tool fails
+The PostToolUseFailure hook provides corrective context — if a function was renamed or moved, CodeGraph tells the agent where to find it now.
+
+### When subagents spawn
+The SubagentStart hook injects a compact project overview (top symbols, frameworks, file counts) into every subagent. They start with full codebase awareness from turn one.
+
 ### Before conversation compaction
 The PreCompact hook saves a PageRank summary of the most important symbols. Structural awareness survives even when conversation history gets compressed.
+
+### Before the agent stops
+The Stop hook checks for graph inconsistencies (high unresolved reference ratio) and can suggest the agent continue to address them before stopping.
+
+### When a task completes
+The TaskCompleted hook runs a quality gate — re-indexes the project and reports any new dead code or unresolved references introduced during the task.
+
+### When a session ends
+The SessionEnd hook runs a final incremental re-index and logs session-level diagnostics (file count, node count, edge count, unresolved refs).
 
 ## Performance
 
@@ -178,7 +196,7 @@ Source Files ──→ tree-sitter ──→ Extractor ──→ SQLite DB
                                        ↓
                               MCP Server (stdio)
                          ├── 13 tools via rmcp
-                         └── 4 Claude Code hooks
+                         └── 10 Claude Code hooks
 ```
 
 ### Module Layout
@@ -213,7 +231,7 @@ src/
     installer.rs          Interactive installer with ASCII banner + progress bars
   hooks/
     install.rs            .mcp.json + .claude/settings.json + shell scripts
-    handlers.rs           4 runtime handlers with catch_unwind safety
+    handlers.rs           10 runtime handlers with catch_unwind safety
     git_hooks.rs          Git post-commit hook (idempotent, marker-based)
     claude_template.rs    CLAUDE.md generation with tool instructions
 ```

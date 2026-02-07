@@ -2,7 +2,7 @@
 //!
 //! The [`install_hooks`] function performs three non-destructive operations:
 //!
-//! 1. **Shell scripts** — Writes four executable bash scripts into `.claude/hooks/`
+//! 1. **Shell scripts** — Writes ten executable bash scripts into `.claude/hooks/`
 //!    that delegate to `codegraph hook-*` subcommands.
 //! 2. **`settings.json`** — Merges hook entries into `.claude/settings.json` so
 //!    Claude Code invokes the scripts at the right lifecycle points.
@@ -82,6 +82,36 @@ const HOOK_SCRIPTS: &[HookScript] = &[
         subcommand: "hook-post-edit",
         comment: "CodeGraph post-edit hook — re-index modified file",
     },
+    HookScript {
+        filename: "pre-tool-use.sh",
+        subcommand: "hook-pre-tool-use",
+        comment: "CodeGraph pre-tool-use hook — inject codebase context before tool execution",
+    },
+    HookScript {
+        filename: "subagent-start.sh",
+        subcommand: "hook-subagent-start",
+        comment: "CodeGraph subagent-start hook — inject project overview into subagents",
+    },
+    HookScript {
+        filename: "post-tool-failure.sh",
+        subcommand: "hook-post-tool-failure",
+        comment: "CodeGraph post-tool-failure hook — provide corrective context after failures",
+    },
+    HookScript {
+        filename: "stop.sh",
+        subcommand: "hook-stop",
+        comment: "CodeGraph stop hook — quality check before agent stops",
+    },
+    HookScript {
+        filename: "task-completed.sh",
+        subcommand: "hook-task-completed",
+        comment: "CodeGraph task-completed hook — quality gate on task completion",
+    },
+    HookScript {
+        filename: "session-end.sh",
+        subcommand: "hook-session-end",
+        comment: "CodeGraph session-end hook — final re-index and diagnostics",
+    },
 ];
 
 /// Render a hook script body.
@@ -143,6 +173,43 @@ fn build_hooks_value() -> Value {
             "hooks": [{
                 "type": "command",
                 "command": "bash .claude/hooks/post-tool-use.sh"
+            }]
+        }],
+        "PreToolUse": [{
+            "matcher": "Edit|Write|Read|Grep|Glob|Bash",
+            "hooks": [{
+                "type": "command",
+                "command": "bash .claude/hooks/pre-tool-use.sh"
+            }]
+        }],
+        "SubagentStart": [{
+            "hooks": [{
+                "type": "command",
+                "command": "bash .claude/hooks/subagent-start.sh"
+            }]
+        }],
+        "PostToolUseFailure": [{
+            "hooks": [{
+                "type": "command",
+                "command": "bash .claude/hooks/post-tool-failure.sh"
+            }]
+        }],
+        "Stop": [{
+            "hooks": [{
+                "type": "command",
+                "command": "bash .claude/hooks/stop.sh"
+            }]
+        }],
+        "TaskCompleted": [{
+            "hooks": [{
+                "type": "command",
+                "command": "bash .claude/hooks/task-completed.sh"
+            }]
+        }],
+        "SessionEnd": [{
+            "hooks": [{
+                "type": "command",
+                "command": "bash .claude/hooks/session-end.sh"
             }]
         }]
     })
@@ -345,6 +412,9 @@ mod tests {
         assert!(parsed["hooks"]["UserPromptSubmit"].is_array());
         assert!(parsed["hooks"]["PreCompact"].is_array());
         assert!(parsed["hooks"]["PostToolUse"].is_array());
+        assert!(parsed["hooks"]["PreToolUse"].is_array());
+        assert!(parsed["hooks"]["SubagentStart"].is_array());
+        assert!(parsed["hooks"]["PostToolUseFailure"].is_array());
     }
 
     #[test]
@@ -441,6 +511,12 @@ mod tests {
         assert!(hooks_dir.join("prompt-submit.sh").exists());
         assert!(hooks_dir.join("pre-compact.sh").exists());
         assert!(hooks_dir.join("post-tool-use.sh").exists());
+        assert!(hooks_dir.join("pre-tool-use.sh").exists());
+        assert!(hooks_dir.join("subagent-start.sh").exists());
+        assert!(hooks_dir.join("post-tool-failure.sh").exists());
+        assert!(hooks_dir.join("stop.sh").exists());
+        assert!(hooks_dir.join("task-completed.sh").exists());
+        assert!(hooks_dir.join("session-end.sh").exists());
 
         // settings.json has hooks
         let settings: Value = serde_json::from_str(
@@ -449,6 +525,12 @@ mod tests {
         .unwrap();
         assert!(settings["hooks"]["SessionStart"].is_array());
         assert!(settings["hooks"]["PostToolUse"][0]["matcher"] == "Write|Edit");
+        assert!(settings["hooks"]["PreToolUse"].is_array());
+        assert!(settings["hooks"]["SubagentStart"].is_array());
+        assert!(settings["hooks"]["PostToolUseFailure"].is_array());
+        assert!(settings["hooks"]["Stop"].is_array());
+        assert!(settings["hooks"]["TaskCompleted"].is_array());
+        assert!(settings["hooks"]["SessionEnd"].is_array());
 
         // .mcp.json has codegraph server
         let mcp: Value =

@@ -56,11 +56,17 @@ TypeScript, TSX, JavaScript, JSX, Python, Go, Rust, Java, C, C++, C#, PHP, Ruby,
 12. `codegraph_frameworks` — Detect project frameworks
 13. `codegraph_languages` — Language breakdown statistics
 
-## Claude Code Hooks
+## Claude Code Hooks (10)
 - **SessionStart** — Incremental re-index on session open
 - **UserPromptSubmit** — Inject graph-aware context into prompts
-- **PreCompact** — Save PageRank summary before compaction
+- **PreToolUse** — Inject codebase context before tool execution (Edit/Write/Read/Grep/Glob/Bash)
 - **PostToolUse** — Re-index modified file after Write/Edit
+- **PostToolUseFailure** — Provide corrective context when tools fail
+- **SubagentStart** — Inject project overview into subagents
+- **PreCompact** — Save PageRank summary before compaction
+- **Stop** — Quality check before agent stops (unresolved ref ratio)
+- **TaskCompleted** — Quality gate: dead code + unresolved ref report
+- **SessionEnd** — Final re-index and session diagnostics
 
 ## Conventions
 - Sync core, async only at MCP boundary (rmcp + tokio)

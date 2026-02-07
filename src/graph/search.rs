@@ -1,11 +1,8 @@
 //! Hybrid search engine for the CodeGraph.
 //!
-//! Faithfully ports the TypeScript `graph/search.ts` to Rust. Combines
-//! SQLite FTS5 keyword search with vector cosine similarity (via
-//! sqlite-vec), merging results through Reciprocal Rank Fusion (RRF).
-//!
-//! Vector search is stubbed as a placeholder — actual embedding
-//! integration lands in Phase 5.
+//! Combines SQLite FTS5 keyword search with vector cosine similarity
+//! (via sqlite-vec / fastembed Jina v2 Base Code 768-dim), merging
+//! results through Reciprocal Rank Fusion (RRF, k=60).
 
 use std::collections::HashMap;
 
