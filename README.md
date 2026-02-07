@@ -3,16 +3,19 @@
 **Codebase intelligence as an MCP server. Native Rust. Sub-second indexing. Zero runtime dependencies.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-314%20passing-brightgreen)]()
-[![Languages](https://img.shields.io/badge/languages-15-blue)]()
+[![Tests](https://img.shields.io/badge/tests-2063%20passing-brightgreen)]()
+[![Languages](https://img.shields.io/badge/languages-32-blue)]()
+[![MCP Tools](https://img.shields.io/badge/MCP%20tools-44-purple)]()
 
 ---
 
 ## What is this?
 
-CodeGraph builds a complete semantic graph of your codebase — every function, class, import, and call relationship across 15 programming languages — and makes it instantly available to AI coding agents through the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP).
+CodeGraph builds a complete semantic graph of your codebase — every function, class, import, and call relationship across **32 programming languages** — and makes it instantly available to AI coding agents through the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP).
 
 When Claude Code, Codex, or any MCP-compatible agent enters your project, CodeGraph gives it an immediate, deep understanding of your entire codebase: what calls what, what depends on what, what breaks if you change something. Not file-level grep — **graph-aware, semantically-ranked, token-budgeted context**.
+
+**v0.2.1** adds git integration, security scanning (OWASP/CWE), call graph analysis, data flow analysis, a YAML configuration system, and structured logging.
 
 ## Install
 
@@ -20,10 +23,22 @@ When Claude Code, Codex, or any MCP-compatible agent enters your project, CodeGr
 curl -fsSL https://raw.githubusercontent.com/suatkocar/codegraph/main/install.sh | bash
 ```
 
+Or via npm:
+
+```bash
+npx @suatkocar/codegraph init
+```
+
+Or via Homebrew:
+
+```bash
+brew tap suatkocar/codegraph && brew install codegraph
+```
+
 Or build from source:
 
 ```bash
-cargo install --git https://github.com/suatkocar/codegraph
+cargo build --release --no-default-features
 ```
 
 ## Quick Start
@@ -81,9 +96,8 @@ The SessionEnd hook runs a final incremental re-index and logs session-level dia
 |---|---|---|---|
 | Tokens per task | ~5,000 | ~1,550 | **68% fewer** |
 | Files examined | 11 (all) | 3 avg | **73% fewer** |
-| Index 30 files | N/A | **127ms** | Sub-second |
-| Incremental no-op | N/A | **12ms** | Instant |
-| Binary size | N/A | **29 MB** | Single file, no runtime |
+| Index 54 files | N/A | **230ms** | Sub-second |
+| Incremental no-op | N/A | **13ms** | Instant |
 | CPU utilization | N/A | **600%+** | Parallel parsing via rayon |
 
 ### Token Reduction Benchmarks
@@ -106,85 +120,149 @@ Measured on a real 11-file TypeScript project with ground truth evaluation:
 | Caller detection | 1.00 | 1.00 | **1.00** |
 | Dead code detection | 0.75 | 1.00 | **0.86** |
 | Search relevance | 0.27 | 0.58 | **0.37** |
-| **Overall** | **0.51** | **0.65** | **0.56** |
 
-Caller detection achieves perfect precision and recall — CodeGraph never misses a caller and never hallucinates one. Dead code detection catches 100% of truly unused symbols. Search metrics are measured with keyword-only search (FTS5); hybrid search with embeddings scores higher.
+Caller detection achieves perfect precision and recall — CodeGraph never misses a caller and never hallucinates one.
 
-Embedding generation (Jina v2 Base Code, 768-dim ONNX) runs on first index. Subsequent incremental runs skip unchanged files entirely.
+## Supported Languages (32)
 
-## Supported Languages
-
-| Language | Extensions | Grammar |
-|---|---|---|
-| TypeScript | `.ts` | tree-sitter-typescript |
-| TSX | `.tsx` | tree-sitter-typescript |
-| JavaScript | `.js` `.mjs` `.cjs` | tree-sitter-javascript |
-| JSX | `.jsx` | tree-sitter-javascript |
-| Python | `.py` | tree-sitter-python |
-| Go | `.go` | tree-sitter-go |
-| Rust | `.rs` | tree-sitter-rust |
-| Java | `.java` | tree-sitter-java |
-| C | `.c` `.h` | tree-sitter-c |
-| C++ | `.cpp` `.cc` `.hpp` | tree-sitter-cpp |
-| C# | `.cs` | tree-sitter-c-sharp |
-| PHP | `.php` | tree-sitter-php |
-| Ruby | `.rb` | tree-sitter-ruby |
-| Swift | `.swift` | tree-sitter-swift |
-| Kotlin | `.kt` `.kts` | tree-sitter-kotlin-ng |
+| Language | Extensions | Language | Extensions |
+|---|---|---|---|
+| TypeScript | `.ts` | Haskell | `.hs` `.lhs` |
+| TSX | `.tsx` | Elixir | `.ex` `.exs` |
+| JavaScript | `.js` `.mjs` `.cjs` | Groovy | `.groovy` `.gradle` |
+| JSX | `.jsx` | PowerShell | `.ps1` `.psm1` |
+| Python | `.py` | Perl | `.pl` `.pm` |
+| Go | `.go` | Clojure | `.clj` `.cljs` |
+| Rust | `.rs` | Julia | `.jl` |
+| Java | `.java` | R | `.R` `.r` |
+| C | `.c` `.h` | Erlang | `.erl` `.hrl` |
+| C++ | `.cpp` `.cc` `.hpp` | Elm | `.elm` |
+| C# | `.cs` | Fortran | `.f90` `.f95` |
+| PHP | `.php` | Nix | `.nix` |
+| Ruby | `.rb` | Bash | `.sh` `.bash` |
+| Swift | `.swift` | Scala | `.scala` `.sc` |
+| Kotlin | `.kt` `.kts` | Dart | `.dart` |
+| Verilog | `.v` `.sv` | Zig | `.zig` |
+| Lua | `.lua` | | |
 
 All grammars are statically linked at compile time via native tree-sitter 0.25. No WASM, no runtime downloads, no initialization delay.
 
-## MCP Tools
+## MCP Tools (44)
 
-CodeGraph exposes 13 tools through MCP. Any compatible client (Claude Code, Claude Desktop, Cursor, etc.) can invoke them.
+### Core (13)
 
-| Tool | Purpose | Technique |
-|---|---|---|
-| `codegraph_query` | Hybrid keyword + semantic search | FTS5 BM25 + sqlite-vec cosine + RRF fusion |
-| `codegraph_dependencies` | Forward dependency traversal | Recursive CTEs with configurable depth |
-| `codegraph_callers` | Reverse call graph | Recursive CTEs on incoming edges |
-| `codegraph_callees` | Forward call graph | Recursive CTEs on outgoing call edges |
-| `codegraph_impact` | Blast radius analysis | Transitive closure + risk classification |
-| `codegraph_structure` | Project overview | PageRank-ranked symbol statistics |
-| `codegraph_tests` | Test coverage discovery | Edge traversal to test-annotated nodes |
-| `codegraph_context` | LLM context assembly | 4-tier token budget (Core/Near/Extended/Background) |
-| `codegraph_node` | Direct symbol lookup | Full details + relationships + suggestions |
-| `codegraph_diagram` | Mermaid diagram generation | Dependency and call graph rendering |
-| `codegraph_dead_code` | Find unused symbols | LEFT JOIN analysis, excludes exported/main/test |
-| `codegraph_frameworks` | Detect project frameworks | Manifest file analysis (18+ frameworks) |
-| `codegraph_languages` | Language breakdown | Per-language file and symbol statistics |
+| Tool | Purpose |
+|---|---|
+| `codegraph_query` | Hybrid keyword + semantic search (FTS5 + sqlite-vec + RRF) |
+| `codegraph_dependencies` | Forward dependency traversal (recursive CTEs) |
+| `codegraph_callers` | Reverse call graph |
+| `codegraph_callees` | Forward call graph |
+| `codegraph_impact` | Blast radius analysis with risk classification |
+| `codegraph_structure` | Project overview with PageRank-ranked symbols |
+| `codegraph_tests` | Test coverage discovery |
+| `codegraph_context` | LLM context assembly (4-tier token budget) |
+| `codegraph_node` | Direct symbol lookup with relationships |
+| `codegraph_diagram` | Mermaid diagram generation |
+| `codegraph_dead_code` | Find unused symbols |
+| `codegraph_frameworks` | Detect project frameworks (18+) |
+| `codegraph_languages` | Language breakdown statistics |
 
-### Example: Find what breaks if you change a file
+### Git Integration (9)
+
+| Tool | Purpose |
+|---|---|
+| `codegraph_blame` | Line-by-line git blame |
+| `codegraph_file_history` | File commit history |
+| `codegraph_recent_changes` | Recent repository commits |
+| `codegraph_commit_diff` | Commit diff details |
+| `codegraph_symbol_history` | Symbol modification history |
+| `codegraph_branch_info` | Branch status and tracking info |
+| `codegraph_modified_files` | Working tree changes (staged/unstaged) |
+| `codegraph_hotspots` | Churn-based hotspot detection |
+| `codegraph_contributors` | Contributor statistics |
+
+### Security (9)
+
+| Tool | Purpose |
+|---|---|
+| `codegraph_scan_security` | YAML rule-based vulnerability scan |
+| `codegraph_check_owasp` | OWASP Top 10 2021 scan |
+| `codegraph_check_cwe` | CWE Top 25 scan |
+| `codegraph_explain_vulnerability` | CWE explanation + remediation guidance |
+| `codegraph_suggest_fix` | Fix suggestion for findings |
+| `codegraph_find_injections` | SQL/XSS/command injection via taint analysis |
+| `codegraph_taint_sources` | Identify taint sources in code |
+| `codegraph_security_summary` | Comprehensive risk assessment |
+| `codegraph_trace_taint` | Data flow tracing from source to sink |
+
+### Repository & Analysis (7)
+
+| Tool | Purpose |
+|---|---|
+| `codegraph_stats` | Index statistics (nodes, edges, files) |
+| `codegraph_circular_imports` | Cycle detection (Tarjan SCC) |
+| `codegraph_project_tree` | Directory tree with symbol counts |
+| `codegraph_find_references` | Cross-reference search |
+| `codegraph_export_map` | Module export listing |
+| `codegraph_import_graph` | Import graph visualization |
+| `codegraph_file` | File symbol listing |
+
+### Call Graph & Data Flow (6)
+
+| Tool | Purpose |
+|---|---|
+| `codegraph_find_path` | Shortest call path between two functions (BFS) |
+| `codegraph_complexity` | Cyclomatic + cognitive complexity per function |
+| `codegraph_data_flow` | Variable def-use chains |
+| `codegraph_dead_stores` | Assignments never read |
+| `codegraph_find_uninitialized` | Variables used before initialization |
+| `codegraph_reaching_defs` | Reaching definition analysis |
+
+## Security Scanning
+
+CodeGraph includes a built-in security scanner with YAML-based rules:
+
+- **4 bundled rule sets**: OWASP Top 10, CWE Top 25, cryptographic weaknesses, secret detection
+- **50+ rules** covering SQL injection, XSS, command injection, hardcoded secrets, weak crypto, and more
+- **Taint analysis**: Source-to-sink data flow tracking for injection vulnerabilities
+- **Custom rules**: Write your own YAML rules with regex patterns, severity, CWE/OWASP mappings
 
 ```bash
-codegraph impact src/auth/middleware.ts
+codegraph scan-security        # Full scan with all rules
+codegraph check-owasp          # OWASP Top 10 only
+codegraph check-cwe            # CWE Top 25 only
 ```
 
-```
-Impact Analysis: src/auth/middleware.ts
-  Risk:                 high
-  Direct dependents:    12
-  Transitive dependents:47
-  Affected files:       8
-    - src/routes/api.ts
-    - src/routes/admin.ts
-    - src/middleware/cors.ts
-    ...
+## Configuration
+
+CodeGraph supports layered YAML configuration:
+
+```yaml
+# .codegraph.yaml (project-level) or ~/.config/codegraph/config.yaml (user-level)
+version: "1.0"
+preset: balanced  # minimal | balanced | full | security-focused
+
+tools:
+  overrides:
+    codegraph_dead_code:
+      enabled: false
+      reason: "Too noisy for this project"
+
+performance:
+  exclude_tests: true
 ```
 
-### Example: Get LLM-optimized context for a task
+**4 presets**: `minimal` (15 tools), `balanced` (30 tools), `full` (all 44), `security-focused`
 
-```bash
-codegraph query "authentication flow"
-```
+**Auto editor detection**: Claude Code → full, VS Code → balanced, Zed → minimal
 
-Returns ranked results combining keyword relevance (BM25) with semantic similarity (768-dim code-specific embeddings), fused via Reciprocal Rank Fusion.
+**Environment overrides**: `CODEGRAPH_PRESET`, `CODEGRAPH_DISABLED_TOOLS`
 
 ## Architecture
 
 ```
 Source Files ──→ tree-sitter ──→ Extractor ──→ SQLite DB
-  (15 langs)     (native parse)   (nodes+edges)   ├── FTS5 (keyword index)
+  (32 langs)     (native parse)   (nodes+edges)   ├── FTS5 (keyword index)
                                                    ├── sqlite-vec (vector index)
                                                    └── edges (graph structure)
                                        ↓
@@ -195,7 +273,7 @@ Source Files ──→ tree-sitter ──→ Extractor ──→ SQLite DB
                          └── Context Assembly (4-tier budget)
                                        ↓
                               MCP Server (stdio)
-                         ├── 13 tools via rmcp
+                         ├── 44 tools via rmcp
                          └── 10 Claude Code hooks
 ```
 
@@ -204,10 +282,10 @@ Source Files ──→ tree-sitter ──→ Extractor ──→ SQLite DB
 ```
 src/
   main.rs                 CLI entry point (16 commands, clap derive)
-  mcp/server.rs           MCP server — 13 tools via rmcp #[tool] macros
+  mcp/server.rs           MCP server — 44 tools via rmcp #[tool] macros
   db/schema.rs            SQLite schema — FTS5 + sqlite-vec + unresolved_refs
   indexer/
-    parser.rs             15 tree-sitter grammars, statically linked
+    parser.rs             32 tree-sitter grammars, statically linked
     extractor.rs          AST → nodes, edges, qualified names for all languages
     pipeline.rs           Parallel indexing with rayon + incremental SHA-256 hashing
     embedder.rs           Jina v2 Base Code embeddings (768-dim, ONNX)
@@ -216,6 +294,8 @@ src/
     traversal.rs          Dependency/caller/callee traversal via recursive CTEs
     ranking.rs            PageRank, personalized PageRank, blast radius
     search.rs             Hybrid FTS5 + vector search, RRF fusion (k=60)
+    complexity.rs         Cyclomatic + cognitive complexity analysis
+    dataflow.rs           Def-use chains, reaching definitions, dead stores
   context/
     assembler.rs          4-tier token-budgeted LLM context assembly
     budget.rs             Token estimation, truncation, signature extraction
@@ -224,6 +304,20 @@ src/
     routes.rs             Framework-specific route/component resolvers
     frameworks.rs         Framework detection (18+ frameworks from manifests)
     dead_code.rs          Unused symbol detection via edge analysis
+  git/
+    blame.rs              Git blame integration
+    history.rs            File/symbol history, commit diffs
+    analysis.rs           Hotspots, contributors, branch info
+  security/
+    scanner.rs            Directory/file scanning engine
+    rules.rs              YAML rule parser + bundled rule loader
+    taint.rs              Source-to-sink taint analysis
+  config/
+    schema.rs             Configuration data model + validation
+    loader.rs             Layered config loading (user → project → env → CLI)
+    preset.rs             4 presets with tool/category filtering
+  observability/
+    mod.rs                Structured logging (tracing), path validation, secret redaction
   eval/
     harness.rs            Evaluation framework (precision/recall/F1)
     token_benchmark.rs    Token reduction measurement vs baseline
@@ -255,75 +349,18 @@ codegraph git-hooks install       Install git post-commit hook
 codegraph git-hooks uninstall     Remove git post-commit hook
 ```
 
-## How It Works
-
-### Indexing
-
-Files are discovered via the `ignore` crate (respects `.gitignore`), hashed with SHA-256 for change detection, and parsed in parallel using rayon. Each file passes through a native tree-sitter grammar that produces a concrete syntax tree. The extractor identifies functions, classes, interfaces, methods, structs, traits, enums, imports, and their relationships (calls, imports, extends, implements, references, contains).
-
-Nodes and edges are upserted into SQLite with content-hash deduplication. On incremental runs, unchanged files are skipped entirely.
-
-After extraction, a **cross-file import resolution** pass resolves relative import specifiers (e.g., `./utils`, `../helpers/auth`) to actual file paths and creates direct symbol-to-symbol edges. This connects the dependency graph across file boundaries, enabling accurate cross-file call tracing and impact analysis.
-
-### Search
-
-The hybrid search engine runs two parallel paths:
-
-1. **FTS5 keyword search** — BM25-ranked full-text search over symbol names, signatures, and documentation
-2. **Vector similarity search** — The query is embedded into a 768-dimensional vector via Jina v2 Base Code (a model specifically trained on programming languages), then matched against pre-computed node embeddings using sqlite-vec
-
-Results are merged using **Reciprocal Rank Fusion** (RRF, k=60), a score-agnostic method that combines rank positions without needing score normalization.
-
-### Context Assembly
-
-The context assembler builds structured Markdown that fits within a configurable token budget:
-
-| Tier | Budget | Contents |
-|---|---|---|
-| **Core** | 40% | Full source code of the top-ranked results |
-| **Near** | 25% | Signatures of direct callers and callees |
-| **Extended** | 20% | Related tests and sibling declarations |
-| **Background** | 15% | Project file listing for structural orientation |
-
-### Qualified Names
-
-Methods and properties are automatically assigned qualified names that chain through their enclosing types: `AuthService.login`, `Database.connect`, `Outer.Inner.method`. This improves search precision — querying for `AuthService.login` finds exactly the right symbol, not every `login` function in the project.
-
-### Framework-Specific Resolution
-
-Beyond generic import resolution, CodeGraph understands framework patterns:
-
-- **React/Next.js** — Resolves JSX component references (`<UserProfile />`) to their definitions
-- **Express** — Connects route handler registrations to handler functions
-- **Django** — Links URL patterns to view functions
-- **Rails** — Maps route definitions to controller actions
-- **Laravel** — Resolves route closures and controller references
-- **Spring Boot** — Connects `@RequestMapping` annotations to controller methods
-
-### Unresolved Reference Tracking
-
-Imports that can't be resolved to known symbols (external packages, missing files) are tracked in a dedicated `unresolved_refs` table. This provides visibility into dependency gaps and helps identify missing or misconfigured imports.
-
-### Framework Detection
-
-CodeGraph analyzes manifest files (package.json, Cargo.toml, go.mod, requirements.txt, pom.xml, build.gradle, composer.json, Gemfile) to detect 18+ frameworks: React, Next.js, Vue, Angular, Express, NestJS, Django, Flask, FastAPI, Rails, Laravel, Symfony, Spring Boot, Actix, Axum, Rocket, Gin, Echo.
-
-### Dead Code Analysis
-
-Symbols with zero incoming edges (excluding exported symbols, main functions, and test functions) are flagged as potentially unused. Filter by kind (function, class, method, etc.) to focus on what matters.
-
 ## Building from Source
 
 ```bash
 # Prerequisites: Rust 1.75+, C compiler (for tree-sitter + SQLite)
 
-# Full build with embeddings (~45MB binary)
+# Full build with embeddings
 cargo build --release
 
-# Without embeddings (keyword-only search, ~29MB binary)
+# Without embeddings (keyword-only search, leaner binary)
 cargo build --release --no-default-features
 
-# Run the test suite (314 tests)
+# Run the test suite (2063 tests)
 cargo test
 ```
 
@@ -335,25 +372,23 @@ rm ~/.local/bin/codegraph
 
 # Remove project data (run inside each project you initialized)
 rm -rf .codegraph/
-codegraph git-hooks uninstall   # if you installed git hooks
+codegraph git-hooks uninstall
 
 # Remove Claude Code integration files (optional, check before deleting)
 rm .mcp.json
 rm -rf .claude/
 ```
 
-If you installed to a custom directory via `CODEGRAPH_INSTALL`, remove the binary from there instead.
-
 ## Design Decisions
 
 - **Sync core, async only at the MCP boundary.** tree-sitter and rusqlite are synchronous. Tokio is used only for the rmcp stdio transport.
-- **Native tree-sitter, not WASM.** 15 grammars statically linked. No initialization delay, no runtime downloads.
+- **Native tree-sitter, not WASM.** 32 grammars statically linked. No initialization delay, no runtime downloads.
 - **Code-specific embeddings.** Jina v2 Base Code (768-dim) understands programming language semantics, not just natural language.
 - **Feature-gated embeddings.** Build with `--no-default-features` for a leaner binary that does keyword-only search.
 - **Hooks never panic.** Every handler uses `catch_unwind` and always returns valid JSON. CodeGraph never blocks your agent.
 - **Idempotent everything.** Running `init` twice produces the same result. Hooks are marker-based. Config merges are additive.
-- **Qualified names by containment.** `Class.method` names are derived from line-range enclosure, not AST parent-child — works across all 15 languages without language-specific logic.
-- **Interactive by default, scriptable with `--yes`.** The init command shows a banner, detects your project, and asks for confirmation. Pass `--yes` for CI/scripting.
+- **Qualified names by containment.** `Class.method` names are derived from line-range enclosure — works across all 32 languages without language-specific logic.
+- **Structured logging.** Uses the `tracing` crate with `RUST_LOG` support. Path traversal protection and secret redaction on all MCP tool inputs/outputs.
 
 ## License
 

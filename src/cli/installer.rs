@@ -21,7 +21,7 @@ pub fn print_banner() {
         "  {} {} {}",
         style("Codebase Intelligence").white().bold(),
         style("·").dim(),
-        style("Native Rust · 15 Languages · 13 MCP Tools").dim()
+        style("Native Rust · 32 Languages · 44 MCP Tools").dim()
     );
     println!();
 }
