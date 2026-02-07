@@ -13,7 +13,7 @@
 //!   extraction needs the global symbol table, but each file is still
 //!   independent once the index is built.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -27,6 +27,7 @@ use crate::error::{CodeGraphError, Result};
 use crate::graph::store::GraphStore;
 use crate::indexer::extractor::Extractor;
 use crate::indexer::parser::CodeParser;
+use crate::resolution::imports::resolve_imports;
 use crate::types::{CodeEdge, CodeNode, Language};
 
 // ---------------------------------------------------------------------------
@@ -253,13 +254,63 @@ impl<'a> IndexingPipeline<'a> {
             })
             .collect();
 
+        // ---- Collect edge results ----
+        let mut file_data: Vec<(String, Language, String, Vec<CodeNode>, Vec<CodeEdge>)> =
+            Vec::new();
+        for result in edge_results {
+            file_data.push(result?);
+        }
+
+        // ---- Cross-file import resolution ----
+        // Build the set of indexed file paths and a nodes-by-file lookup.
+        let indexed_files: HashSet<String> = file_data
+            .iter()
+            .map(|(path, _, _, _, _)| path.clone())
+            .collect();
+        let mut nodes_by_file: HashMap<String, Vec<CodeNode>> = HashMap::new();
+        for (path, _, _, nodes, _) in &file_data {
+            nodes_by_file.insert(path.clone(), nodes.clone());
+        }
+        // Include existing nodes from incremental runs
+        if options.incremental {
+            for node in &all_nodes {
+                if !indexed_files.contains(&node.file_path) {
+                    nodes_by_file
+                        .entry(node.file_path.clone())
+                        .or_default()
+                        .push((*node).clone());
+                }
+            }
+        }
+
+        // Collect all edges across all files for resolution
+        let all_edges: Vec<&CodeEdge> = file_data
+            .iter()
+            .flat_map(|(_, _, _, _, edges)| edges.iter())
+            .collect();
+        let all_edges_owned: Vec<CodeEdge> = all_edges.iter().map(|e| (*e).clone()).collect();
+
+        let resolved = resolve_imports(&all_edges_owned, &indexed_files, &node_index, &nodes_by_file);
+
+        // Group resolved edges by their source file for merging
+        let mut resolved_by_file: HashMap<String, Vec<CodeEdge>> = HashMap::new();
+        for edge in resolved {
+            resolved_by_file
+                .entry(edge.file_path.clone())
+                .or_default()
+                .push(edge);
+        }
+
         // ---- Persist to SQLite (sequential — single connection) ----
         let mut files_indexed = 0usize;
         let mut nodes_created = 0usize;
         let mut edges_created = 0usize;
 
-        for result in edge_results {
-            let (rel_path, language, content_hash, nodes, edges) = result?;
+        for (rel_path, language, content_hash, nodes, mut edges) in file_data {
+            // Merge resolved import edges into this file's edges
+            if let Some(extra_edges) = resolved_by_file.remove(&rel_path) {
+                edges.extend(extra_edges);
+            }
 
             self.store.replace_file_data(&rel_path, &nodes, &edges)?;
             self.upsert_file_hash(&rel_path, &content_hash, language)?;
@@ -344,7 +395,7 @@ impl<'a> IndexingPipeline<'a> {
         }
         let node_index = build_node_index(&all_nodes);
 
-        let edges = Extractor::extract_edges(
+        let mut edges = Extractor::extract_edges(
             &tree,
             &rel_path,
             language,
@@ -352,6 +403,25 @@ impl<'a> IndexingPipeline<'a> {
             &nodes,
             &node_index,
         )?;
+
+        // Cross-file import resolution for single file re-index
+        let mut indexed_files: HashSet<String> = existing
+            .iter()
+            .map(|n| n.file_path.clone())
+            .collect();
+        indexed_files.insert(rel_path.clone());
+
+        let mut nodes_by_file: HashMap<String, Vec<CodeNode>> = HashMap::new();
+        for node in &existing {
+            nodes_by_file
+                .entry(node.file_path.clone())
+                .or_default()
+                .push(node.clone());
+        }
+        nodes_by_file.insert(rel_path.clone(), nodes.clone());
+
+        let resolved = resolve_imports(&edges, &indexed_files, &node_index, &nodes_by_file);
+        edges.extend(resolved);
 
         self.store.replace_file_data(&rel_path, &nodes, &edges)?;
         self.upsert_file_hash(&rel_path, &content_hash, language)?;
@@ -490,6 +560,7 @@ fn sha256_hex(content: &str) -> String {
 mod tests {
     use super::*;
     use crate::db::schema::initialize_database;
+    use crate::types::EdgeKind;
     use std::fs;
 
     fn setup_test_project() -> (tempfile::TempDir, GraphStore) {
@@ -666,6 +737,94 @@ export function greetV2(name: string): string {
         let txt_file = tmp.path().join("readme.txt");
         let result = pipeline.index_file(&txt_file, tmp.path()).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn cross_file_import_resolution() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Create src/ directory
+        fs::create_dir_all(tmp.path().join("src")).unwrap();
+
+        // utils.ts — exports functions
+        fs::write(
+            tmp.path().join("src/utils.ts"),
+            r#"
+export function validate(input: string): boolean {
+    return input.length > 0;
+}
+
+export function sanitize(input: string): string {
+    return input.trim();
+}
+
+function internal(): void {}
+"#,
+        )
+        .unwrap();
+
+        // main.ts — imports from utils
+        fs::write(
+            tmp.path().join("src/main.ts"),
+            r#"
+import { validate, sanitize } from './utils';
+
+function processInput(input: string): string {
+    if (validate(input)) {
+        return sanitize(input);
+    }
+    return '';
+}
+"#,
+        )
+        .unwrap();
+
+        let conn = initialize_database(":memory:").unwrap();
+        let store = GraphStore::from_connection(conn);
+        let pipeline = IndexingPipeline::new(&store);
+
+        let result = pipeline
+            .index_directory(&IndexOptions {
+                root_dir: tmp.path().to_path_buf(),
+                incremental: false,
+            })
+            .unwrap();
+
+        assert_eq!(result.files_indexed, 2);
+
+        // Check that we have cross-file import edges
+        // The import resolution should create edges from file:src/main.ts
+        // to the actual validate and sanitize nodes in src/utils.ts
+        let all_edges = store.get_all_edges().unwrap();
+        let resolved_imports: Vec<_> = all_edges
+            .iter()
+            .filter(|e| {
+                e.kind == EdgeKind::Imports
+                    && e.file_path == "src/main.ts"
+                    && !e.target.starts_with("module:")
+            })
+            .collect();
+
+        assert!(
+            resolved_imports.len() >= 2,
+            "Expected at least 2 resolved import edges (validate, sanitize), got {}. \
+             All import edges: {:?}",
+            resolved_imports.len(),
+            all_edges
+                .iter()
+                .filter(|e| e.kind == EdgeKind::Imports)
+                .map(|e| format!("{} -> {}", e.source, e.target))
+                .collect::<Vec<_>>()
+        );
+
+        // Verify the resolved edges point to actual nodes (not module: targets)
+        for edge in &resolved_imports {
+            assert!(
+                !edge.target.starts_with("module:"),
+                "Resolved edge should not target module: prefix, got: {}",
+                edge.target
+            );
+        }
     }
 
     #[test]

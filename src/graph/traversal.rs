@@ -64,6 +64,27 @@ FROM deps d
 JOIN nodes n ON n.id = d.id
 ORDER BY d.depth ASC, n.name ASC";
 
+const FIND_CALLEES_SQL: &str = "\
+WITH RECURSIVE callees(id, depth, path) AS (
+    -- Base: direct callees (outgoing call edges)
+    SELECT target_id, 1, source_id || '->' || target_id
+    FROM edges
+    WHERE source_id = ?1 AND type = 'calls'
+
+    UNION
+
+    -- Recursive: follow outgoing call edges, with cycle detection
+    SELECT e.target_id, c.depth + 1, c.path || '->' || e.target_id
+    FROM callees c
+    JOIN edges e ON e.source_id = c.id AND e.type = 'calls'
+    WHERE c.depth < ?2
+      AND instr(c.path, e.target_id) = 0
+)
+SELECT DISTINCT n.*, c.depth
+FROM callees c
+JOIN nodes n ON n.id = c.id
+ORDER BY c.depth ASC, n.name ASC";
+
 const FIND_CALLERS_SQL: &str = "\
 WITH RECURSIVE callers(id, depth, path) AS (
     -- Base: direct callers
@@ -161,6 +182,23 @@ impl<'a> GraphTraversal<'a> {
     /// Follows: calls, imports, references, extends, implements.
     pub fn find_dependencies(&self, node_id: &str, max_depth: u32) -> Result<Vec<NodeWithDepth>> {
         let mut stmt = self.store.conn.prepare_cached(FIND_DEPENDENCIES_SQL)?;
+        let rows = stmt.query_and_then(params![node_id, max_depth], |row| {
+            let node = row_to_code_node(row)?;
+            let depth: u32 = row.get("depth")?;
+            Ok::<_, crate::error::CodeGraphError>(NodeWithDepth { node, depth })
+        })?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+    }
+
+    // -------------------------------------------------------------------
+    // find_callees
+    // -------------------------------------------------------------------
+
+    /// Find all callees (outgoing "calls" edges) from a node, up to `max_depth`.
+    /// This is the forward call graph — what does this function call?
+    pub fn find_callees(&self, node_id: &str, max_depth: u32) -> Result<Vec<NodeWithDepth>> {
+        let mut stmt = self.store.conn.prepare_cached(FIND_CALLEES_SQL)?;
         let rows = stmt.query_and_then(params![node_id, max_depth], |row| {
             let node = row_to_code_node(row)?;
             let depth: u32 = row.get("depth")?;
@@ -503,6 +541,66 @@ mod tests {
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].node.id, "b");
         assert_eq!(deps[0].depth, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // find_callees — follows outgoing "calls" edges
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_callees_follows_outgoing_call_edges() {
+        let store = setup();
+        seed_linear_chain(&store); // a -> b -> c -> d (all via Calls edges)
+        let traversal = GraphTraversal::new(&store);
+
+        let callees = traversal.find_callees("a", 5).unwrap();
+
+        // a calls b, b calls c, c calls d
+        assert_eq!(callees.len(), 3);
+        assert_eq!(callees[0].node.id, "b");
+        assert_eq!(callees[0].depth, 1);
+        assert_eq!(callees[1].node.id, "c");
+        assert_eq!(callees[1].depth, 2);
+        assert_eq!(callees[2].node.id, "d");
+        assert_eq!(callees[2].depth, 3);
+    }
+
+    #[test]
+    fn find_callees_ignores_non_call_edges() {
+        let store = setup();
+
+        store
+            .upsert_nodes(&[
+                make_node("a", "alpha", "src/a.ts", NodeKind::Function, 1),
+                make_node("b", "beta", "src/b.ts", NodeKind::Function, 1),
+                make_node("c", "gamma", "src/c.ts", NodeKind::Function, 1),
+            ])
+            .unwrap();
+        store
+            .upsert_edges(&[
+                make_edge("a", "b", EdgeKind::Calls, "src/a.ts", 2),
+                make_edge("a", "c", EdgeKind::Imports, "src/a.ts", 1),
+            ])
+            .unwrap();
+
+        let traversal = GraphTraversal::new(&store);
+        let callees = traversal.find_callees("a", 5).unwrap();
+
+        // Only "calls" edges are followed, so only "b" should appear
+        assert_eq!(callees.len(), 1);
+        assert_eq!(callees[0].node.id, "b");
+    }
+
+    #[test]
+    fn find_callees_respects_max_depth() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let callees = traversal.find_callees("a", 1).unwrap();
+
+        assert_eq!(callees.len(), 1);
+        assert_eq!(callees[0].node.id, "b");
     }
 
     // -----------------------------------------------------------------------

@@ -63,10 +63,12 @@ This project is indexed by CodeGraph. Use the following MCP tools for code navig
 - `codegraph_query "search term"` — Find symbols by keyword + semantic search
 - `codegraph_dependencies "SymbolName"` — What does this symbol depend on?
 - `codegraph_callers "functionName"` — Who calls this function?
+- `codegraph_callees "functionName"` — What does this function call?
 - `codegraph_impact "file.ts"` — What breaks if you change this file?
 - `codegraph_structure` — Get project overview with PageRank-ranked symbols
 - `codegraph_tests "SymbolName"` — Find test coverage for a symbol
 - `codegraph_context "task description"` — Get optimal context for a task
+- `codegraph_node "SymbolName"` — Get full details for a symbol (body, docs, relationships)
 - `codegraph_diagram "SymbolName"` — Generate Mermaid dependency diagram
 - `codegraph_dead_code` — Find potentially unused/dead code symbols
 - `codegraph_frameworks` — Detect frameworks and libraries in the project
@@ -295,10 +297,12 @@ mod tests {
             "codegraph_query",
             "codegraph_dependencies",
             "codegraph_callers",
+            "codegraph_callees",
             "codegraph_impact",
             "codegraph_structure",
             "codegraph_tests",
             "codegraph_context",
+            "codegraph_node",
             "codegraph_diagram",
             "codegraph_dead_code",
             "codegraph_frameworks",

@@ -1,6 +1,6 @@
 //! MCP server implementation using rmcp over stdio transport.
 //!
-//! Provides all 8 CodeGraph tools that Claude (or any MCP client) can invoke
+//! Provides all 13 CodeGraph tools that Claude (or any MCP client) can invoke
 //! to search, navigate, analyze, and visualize a codebase.
 
 use std::collections::{HashMap, HashSet};
@@ -249,7 +249,45 @@ impl CodeGraphServer {
         }
     }
 
-    // 4. codegraph_impact — Blast radius analysis
+    // 4. codegraph_callees — Forward call graph traversal
+    #[tool(
+        name = "codegraph_callees",
+        description = "Find all functions/methods that a symbol calls (forward call graph). Returns a callee tree with depth levels."
+    )]
+    async fn codegraph_callees(
+        &self,
+        #[tool(param)]
+        #[schemars(description = "Symbol name or node ID to find callees for")]
+        symbol: String,
+        #[tool(param)]
+        #[schemars(description = "Maximum traversal depth (default 5, max 50)")]
+        max_depth: Option<u32>,
+    ) -> String {
+        let node = match self.resolve_symbol(&symbol) {
+            Some(n) => n,
+            None => {
+                return json_text(
+                    &serde_json::json!({"error": format!("Symbol \"{}\" not found in the graph.", symbol)}),
+                )
+            }
+        };
+        let store = self.store.lock().unwrap();
+        let traversal = GraphTraversal::new(&store);
+        let depth = max_depth.unwrap_or(5).min(50);
+        match traversal.find_callees(&node.id, depth) {
+            Ok(callees) => json_text(&serde_json::json!({
+                "source": {"id": node.id, "name": node.name, "kind": node.kind.as_str(), "filePath": node.file_path},
+                "calleeCount": callees.len(),
+                "callees": callees.iter().map(|c| serde_json::json!({
+                    "id": c.node.id, "name": c.node.name, "kind": c.node.kind.as_str(),
+                    "filePath": c.node.file_path, "startLine": c.node.start_line, "depth": c.depth,
+                })).collect::<Vec<_>>(),
+            })),
+            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
+        }
+    }
+
+    // 5. codegraph_impact — Blast radius analysis
     #[tool(
         name = "codegraph_impact",
         description = "Analyze the blast radius of changing a file or symbol. Returns affected files and functions grouped by risk level."
@@ -725,7 +763,100 @@ impl CodeGraphServer {
         }
     }
 
-    // 9. codegraph_dead_code — Find potentially unused symbols
+    // 9. codegraph_node — Direct node lookup with full details
+    #[tool(
+        name = "codegraph_node",
+        description = "Look up a specific code symbol by name or ID and return its full details including source code, documentation, file location, and relationships."
+    )]
+    async fn codegraph_node(
+        &self,
+        #[tool(param)]
+        #[schemars(description = "Symbol name or node ID to look up")]
+        symbol: String,
+        #[tool(param)]
+        #[schemars(description = "Include relationships (callers, callees, dependencies) in the response (default false)")]
+        include_relations: Option<bool>,
+    ) -> String {
+        let node = match self.resolve_symbol(&symbol) {
+            Some(n) => n,
+            None => {
+                // Try fuzzy match: search for nodes containing the name
+                let store = self.store.lock().unwrap();
+                let like_query = format!("%{}%", symbol);
+                let mut stmt = match store.conn.prepare_cached(
+                    "SELECT * FROM nodes WHERE name LIKE ?1 ORDER BY name ASC LIMIT 10",
+                ) {
+                    Ok(s) => s,
+                    Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
+                };
+                let suggestions: Vec<String> = stmt
+                    .query_map(rusqlite::params![like_query], |row| row.get::<_, String>(2))
+                    .ok()
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                    .unwrap_or_default();
+
+                return json_text(&serde_json::json!({
+                    "error": format!("Symbol \"{}\" not found in the graph.", symbol),
+                    "suggestions": suggestions,
+                }));
+            }
+        };
+
+        let mut result = serde_json::json!({
+            "id": node.id,
+            "name": node.name,
+            "kind": node.kind.as_str(),
+            "filePath": node.file_path,
+            "startLine": node.start_line,
+            "endLine": node.end_line,
+            "language": node.language.as_str(),
+            "exported": node.exported,
+        });
+
+        if let Some(ref doc) = node.documentation {
+            result["documentation"] = serde_json::json!(doc);
+        }
+        if let Some(ref body) = node.body {
+            result["body"] = serde_json::json!(body);
+        }
+
+        if include_relations.unwrap_or(false) {
+            let store = self.store.lock().unwrap();
+            let traversal = GraphTraversal::new(&store);
+
+            // Callers (depth 1 only)
+            if let Ok(callers) = traversal.find_callers(&node.id, 1) {
+                result["callers"] = serde_json::json!(callers.iter().map(|c| serde_json::json!({
+                    "name": c.node.name, "kind": c.node.kind.as_str(), "filePath": c.node.file_path,
+                })).collect::<Vec<_>>());
+            }
+
+            // Callees (depth 1 only)
+            if let Ok(callees) = traversal.find_callees(&node.id, 1) {
+                result["callees"] = serde_json::json!(callees.iter().map(|c| serde_json::json!({
+                    "name": c.node.name, "kind": c.node.kind.as_str(), "filePath": c.node.file_path,
+                })).collect::<Vec<_>>());
+            }
+
+            // Outgoing edges (all types)
+            if let Ok(out_edges) = store.get_out_edges(&node.id, None) {
+                result["outgoingEdges"] = serde_json::json!(out_edges.iter().map(|e| serde_json::json!({
+                    "target": e.target, "kind": e.kind.as_str(),
+                })).collect::<Vec<_>>());
+            }
+
+            // Incoming edges (all types)
+            if let Ok(in_edges) = store.get_in_edges(&node.id, None) {
+                result["incomingEdges"] = serde_json::json!(in_edges.iter().map(|e| serde_json::json!({
+                    "source": e.source, "kind": e.kind.as_str(),
+                })).collect::<Vec<_>>());
+            }
+        }
+
+        json_text(&result)
+    }
+
+    // 10. codegraph_dead_code — Find potentially unused symbols
     #[tool(
         name = "codegraph_dead_code",
         description = "Find potentially unused/dead code symbols that have no incoming references"
@@ -1058,6 +1189,142 @@ mod tests {
             line,
             metadata: None,
         }
+    }
+
+    // -- codegraph_callees ----------------------------------------------------
+
+    #[tokio::test]
+    async fn callees_returns_forward_call_graph() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[
+                    make_node("n1", "main", "src/main.ts", NodeKind::Function, 1, None),
+                    make_node("n2", "helper", "src/helper.ts", NodeKind::Function, 1, None),
+                    make_node("n3", "util", "src/util.ts", NodeKind::Function, 1, None),
+                ])
+                .unwrap();
+            store
+                .upsert_edges(&[
+                    make_edge("n1", "n2", EdgeKind::Calls, "src/main.ts", 5),
+                    make_edge("n2", "n3", EdgeKind::Calls, "src/helper.ts", 3),
+                    make_edge("n1", "n3", EdgeKind::Imports, "src/main.ts", 1),
+                ])
+                .unwrap();
+        }
+
+        let result = server.codegraph_callees("main".to_string(), None).await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(json["calleeCount"].as_u64().unwrap(), 2);
+        let callees = json["callees"].as_array().unwrap();
+        assert_eq!(callees[0]["name"].as_str().unwrap(), "helper");
+        assert_eq!(callees[0]["depth"].as_u64().unwrap(), 1);
+        assert_eq!(callees[1]["name"].as_str().unwrap(), "util");
+        assert_eq!(callees[1]["depth"].as_u64().unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn callees_not_found() {
+        let server = setup_server();
+        let result = server
+            .codegraph_callees("nonexistent".to_string(), None)
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["error"].as_str().unwrap().contains("not found"));
+    }
+
+    // -- codegraph_node -------------------------------------------------------
+
+    #[tokio::test]
+    async fn node_returns_full_details() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[make_node(
+                    "n1",
+                    "processData",
+                    "src/processor.ts",
+                    NodeKind::Function,
+                    10,
+                    Some(true),
+                )])
+                .unwrap();
+        }
+
+        let result = server
+            .codegraph_node("processData".to_string(), None)
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(json["name"].as_str().unwrap(), "processData");
+        assert_eq!(json["kind"].as_str().unwrap(), "function");
+        assert_eq!(json["filePath"].as_str().unwrap(), "src/processor.ts");
+        assert_eq!(json["startLine"].as_u64().unwrap(), 10);
+        assert_eq!(json["exported"].as_bool().unwrap(), true);
+    }
+
+    #[tokio::test]
+    async fn node_with_relations() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[
+                    make_node("n1", "caller", "src/a.ts", NodeKind::Function, 1, None),
+                    make_node("n2", "target", "src/b.ts", NodeKind::Function, 1, None),
+                    make_node("n3", "callee", "src/c.ts", NodeKind::Function, 1, None),
+                ])
+                .unwrap();
+            store
+                .upsert_edges(&[
+                    make_edge("n1", "n2", EdgeKind::Calls, "src/a.ts", 5),
+                    make_edge("n2", "n3", EdgeKind::Calls, "src/b.ts", 3),
+                ])
+                .unwrap();
+        }
+
+        let result = server
+            .codegraph_node("target".to_string(), Some(true))
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(json["name"].as_str().unwrap(), "target");
+        let callers = json["callers"].as_array().unwrap();
+        assert_eq!(callers.len(), 1);
+        assert_eq!(callers[0]["name"].as_str().unwrap(), "caller");
+        let callees = json["callees"].as_array().unwrap();
+        assert_eq!(callees.len(), 1);
+        assert_eq!(callees[0]["name"].as_str().unwrap(), "callee");
+    }
+
+    #[tokio::test]
+    async fn node_not_found_with_suggestions() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[make_node(
+                    "n1",
+                    "processData",
+                    "src/a.ts",
+                    NodeKind::Function,
+                    1,
+                    None,
+                )])
+                .unwrap();
+        }
+
+        let result = server.codegraph_node("process".to_string(), None).await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+
+        assert!(json["error"].as_str().unwrap().contains("not found"));
+        let suggestions = json["suggestions"].as_array().unwrap();
+        assert!(suggestions
+            .iter()
+            .any(|s| s.as_str().unwrap() == "processData"));
     }
 
     // -- codegraph_dead_code --------------------------------------------------

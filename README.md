@@ -3,7 +3,7 @@
 **Codebase intelligence as an MCP server. Native Rust. Sub-second indexing. Zero runtime dependencies.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-243%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-266%20passing-brightgreen)]()
 [![Languages](https://img.shields.io/badge/languages-15-blue)]()
 
 ---
@@ -92,17 +92,19 @@ All grammars are statically linked at compile time via native tree-sitter 0.25. 
 
 ## MCP Tools
 
-CodeGraph exposes 11 tools through MCP. Any compatible client (Claude Code, Claude Desktop, Cursor, etc.) can invoke them.
+CodeGraph exposes 13 tools through MCP. Any compatible client (Claude Code, Claude Desktop, Cursor, etc.) can invoke them.
 
 | Tool | Purpose | Technique |
 |---|---|---|
 | `codegraph_query` | Hybrid keyword + semantic search | FTS5 BM25 + sqlite-vec cosine + RRF fusion |
 | `codegraph_dependencies` | Forward dependency traversal | Recursive CTEs with configurable depth |
 | `codegraph_callers` | Reverse call graph | Recursive CTEs on incoming edges |
+| `codegraph_callees` | Forward call graph | Recursive CTEs on outgoing call edges |
 | `codegraph_impact` | Blast radius analysis | Transitive closure + risk classification |
 | `codegraph_structure` | Project overview | PageRank-ranked symbol statistics |
 | `codegraph_tests` | Test coverage discovery | Edge traversal to test-annotated nodes |
 | `codegraph_context` | LLM context assembly | 4-tier token budget (Core/Near/Extended/Background) |
+| `codegraph_node` | Direct symbol lookup | Full details + relationships + suggestions |
 | `codegraph_diagram` | Mermaid diagram generation | Dependency and call graph rendering |
 | `codegraph_dead_code` | Find unused symbols | LEFT JOIN analysis, excludes exported/main/test |
 | `codegraph_frameworks` | Detect project frameworks | Manifest file analysis (18+ frameworks) |
@@ -149,7 +151,7 @@ Source Files ──→ tree-sitter ──→ Extractor ──→ SQLite DB
                          └── Context Assembly (4-tier budget)
                                        ↓
                               MCP Server (stdio)
-                         ├── 11 tools via rmcp
+                         ├── 13 tools via rmcp
                          └── 4 Claude Code hooks
 ```
 
@@ -158,7 +160,7 @@ Source Files ──→ tree-sitter ──→ Extractor ──→ SQLite DB
 ```
 src/
   main.rs                 CLI entry point (16 commands, clap derive)
-  mcp/server.rs           MCP server — 11 tools via rmcp #[tool] macros
+  mcp/server.rs           MCP server — 13 tools via rmcp #[tool] macros
   db/schema.rs            SQLite schema — FTS5 + sqlite-vec virtual tables
   indexer/
     parser.rs             15 tree-sitter grammars, statically linked
@@ -174,6 +176,7 @@ src/
     assembler.rs          4-tier token-budgeted LLM context assembly
     budget.rs             Token estimation, truncation, signature extraction
   resolution/
+    imports.rs            Cross-file import path resolution
     frameworks.rs         Framework detection (18+ frameworks from manifests)
     dead_code.rs          Unused symbol detection via edge analysis
   hooks/
@@ -208,6 +211,8 @@ codegraph-mcp git-hooks uninstall     Remove git post-commit hook
 Files are discovered via the `ignore` crate (respects `.gitignore`), hashed with SHA-256 for change detection, and parsed in parallel using rayon. Each file passes through a native tree-sitter grammar that produces a concrete syntax tree. The extractor identifies functions, classes, interfaces, methods, structs, traits, enums, imports, and their relationships (calls, imports, extends, implements, references, contains).
 
 Nodes and edges are upserted into SQLite with content-hash deduplication. On incremental runs, unchanged files are skipped entirely.
+
+After extraction, a **cross-file import resolution** pass resolves relative import specifiers (e.g., `./utils`, `../helpers/auth`) to actual file paths and creates direct symbol-to-symbol edges. This connects the dependency graph across file boundaries, enabling accurate cross-file call tracing and impact analysis.
 
 ### Search
 
@@ -248,7 +253,7 @@ cargo build --release
 # Without embeddings (keyword-only search, ~29MB binary)
 cargo build --release --no-default-features
 
-# Run the test suite (243 tests)
+# Run the test suite (266 tests)
 cargo test
 ```
 
