@@ -16,9 +16,7 @@
 /// would be more accurate, but the 4-char rule is surprisingly close for
 /// English-heavy source code and avoids pulling in a heavy dependency.
 pub fn estimate_tokens(text: &str) -> usize {
-    let len = text.len();
-    // Integer ceiling division: (len + 3) / 4
-    (len + 3) / 4
+    text.len().div_ceil(4)
 }
 
 // ---------------------------------------------------------------------------

@@ -112,6 +112,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
 /// This **must** be called before any connection is opened so that every
 /// new connection automatically has vec0 available.  The call is idempotent
 /// — calling it more than once is harmless.
+#[allow(clippy::missing_transmute_annotations)]
 fn load_sqlite_vec_extension() {
     use rusqlite::ffi::sqlite3_auto_extension;
     use sqlite_vec::sqlite3_vec_init;

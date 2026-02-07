@@ -487,10 +487,11 @@ fn extract_containment_edges(file_nodes: &[CodeNode], edges: &mut Vec<CodeEdge>)
     for member in &members {
         let mut best: Option<&CodeNode> = None;
         for container in &containers {
-            if container.start_line <= member.start_line && container.end_line >= member.end_line {
-                if best.map_or(true, |b| container.start_line > b.start_line) {
-                    best = Some(container);
-                }
+            if container.start_line <= member.start_line
+                && container.end_line >= member.end_line
+                && best.is_none_or(|b| container.start_line > b.start_line)
+            {
+                best = Some(container);
             }
         }
         if let Some(container) = best {
@@ -928,9 +929,8 @@ fn find_enclosing_node(file_nodes: &[CodeNode], line: u32) -> Option<&CodeNode> 
         );
         if is_scope && node.start_line <= line && node.end_line >= line {
             // Pick the tightest enclosure (smallest span).
-            if best.map_or(true, |b| {
-                (node.end_line - node.start_line) < (b.end_line - b.start_line)
-            }) {
+            if best.is_none_or(|b| (node.end_line - node.start_line) < (b.end_line - b.start_line))
+            {
                 best = Some(node);
             }
         }
@@ -1033,8 +1033,8 @@ fn clean_comment(text: &str) -> String {
     }
 
     // Strip closing wrapper.
-    let cleaned_owned = if cleaned.ends_with("*/") {
-        cleaned[..cleaned.len() - 2].to_string()
+    let cleaned_owned = if let Some(stripped) = cleaned.strip_suffix("*/") {
+        stripped.to_string()
     } else {
         cleaned.to_string()
     };
@@ -1058,16 +1058,16 @@ fn clean_comment(text: &str) -> String {
     let result = result.trim().to_string();
 
     // Strip /// or // prefix for line comments.
-    if result.starts_with("///") {
-        return result[3..].trim().to_string();
+    if let Some(stripped) = result.strip_prefix("///") {
+        return stripped.trim().to_string();
     }
-    if result.starts_with("//") {
-        return result[2..].trim().to_string();
+    if let Some(stripped) = result.strip_prefix("//") {
+        return stripped.trim().to_string();
     }
 
     // Strip # prefix for Ruby/Python comments.
-    if result.starts_with('#') {
-        return result[1..].trim().to_string();
+    if let Some(stripped) = result.strip_prefix('#') {
+        return stripped.trim().to_string();
     }
 
     result

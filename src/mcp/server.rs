@@ -82,7 +82,7 @@ fn mermaid_id(node_id: &str) -> String {
     for ch in node_id.chars() {
         hash = ((hash << 5).wrapping_sub(hash)).wrapping_add(ch as i32);
     }
-    format!("n{}", format!("{:x}", hash.unsigned_abs()))
+    format!("n{:x}", hash.unsigned_abs())
 }
 
 fn generate_graph_diagram(
@@ -317,7 +317,7 @@ impl CodeGraphServer {
         let mut medium = Vec::new();
         let mut low = Vec::new();
 
-        for (_, (node, depth)) in &all_affected {
+        for (node, depth) in all_affected.values() {
             let entry = serde_json::json!({
                 "id": node.id, "name": node.name, "kind": node.kind.as_str(),
                 "filePath": node.file_path, "depth": depth,
@@ -396,8 +396,8 @@ impl CodeGraphServer {
 
         if scoped_nodes.is_empty() {
             return json_text(&serde_json::json!({
-                "error": if path.is_some() {
-                    format!("No symbols found under path \"{}\".", path.unwrap())
+                "error": if let Some(p) = path {
+                    format!("No symbols found under path \"{}\".", p)
                 } else {
                     "The code graph is empty. Index a directory first.".to_string()
                 }

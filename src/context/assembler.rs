@@ -366,11 +366,9 @@ impl<'a> ContextAssembler<'a> {
                 Err(_) => continue,
             };
 
-            for row_result in rows {
-                if let Ok(node) = row_result {
-                    if !seen.contains(&node.id) {
-                        siblings.push(node);
-                    }
+            for node in rows.flatten() {
+                if !seen.contains(&node.id) {
+                    siblings.push(node);
                 }
             }
         }

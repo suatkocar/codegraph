@@ -16,6 +16,7 @@ use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
 use std::path::Path;
 
+#[cfg(feature = "embedding")]
 use rusqlite::params;
 
 use crate::error::{CodeGraphError, Result};

@@ -96,6 +96,7 @@ impl<'a> GraphRanking<'a> {
     ///
     /// Uses the power-iteration method on the adjacency structure.  Runs
     /// entirely in memory after loading the edge list from SQLite.
+    #[allow(clippy::needless_range_loop)]
     pub fn compute_page_rank(&self, damping: f64, iterations: usize) -> Vec<RankedNode> {
         let graph = self.load_graph();
         let n = graph.node_ids.len();
@@ -170,6 +171,7 @@ impl<'a> GraphRanking<'a> {
     ///
     /// Instead of uniform teleportation, the random walk always teleports
     /// back to the query node, producing relevance scores relative to it.
+    #[allow(clippy::needless_range_loop)]
     pub fn personalized_page_rank(
         &self,
         query_node_id: &str,

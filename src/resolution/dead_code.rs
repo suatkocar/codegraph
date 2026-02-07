@@ -95,10 +95,8 @@ fn find_dead_code_inner(conn: &Connection) -> crate::error::Result<Vec<DeadCodeR
     })?;
 
     let mut results = Vec::new();
-    for row in rows {
-        if let Ok(r) = row {
-            results.push(r);
-        }
+    for r in rows.flatten() {
+        results.push(r);
     }
     Ok(results)
 }

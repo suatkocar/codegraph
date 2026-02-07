@@ -168,7 +168,6 @@ impl<'a> GraphTraversal<'a> {
         })?;
 
         rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
     }
 
     // -------------------------------------------------------------------
@@ -185,7 +184,6 @@ impl<'a> GraphTraversal<'a> {
         })?;
 
         rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
     }
 
     // -------------------------------------------------------------------
@@ -261,6 +259,7 @@ impl<'a> GraphTraversal<'a> {
         // Recursive inner function — using an explicit closure isn't
         // ergonomic with mutable borrows in Rust, so we use a helper
         // function with all state passed by reference.
+        #[allow(clippy::too_many_arguments)]
         fn strong_connect(
             v: &str,
             adj: &HashMap<String, Vec<String>>,

@@ -202,14 +202,13 @@ fn cmd_init(directory: &str) {
     let db_path = PathBuf::from(directory).join(".codegraph/codegraph.db");
     if db_path.exists() {
         let store = open_store(db_path.to_str().unwrap());
-        let stats_data =
-            store
-                .get_stats()
-                .unwrap_or_else(|_| codegraph_mcp::graph::store::GraphStats {
-                    files: 0,
-                    nodes: 0,
-                    edges: 0,
-                });
+        let stats_data = store
+            .get_stats()
+            .unwrap_or(codegraph_mcp::graph::store::GraphStats {
+                files: 0,
+                nodes: 0,
+                edges: 0,
+            });
         let proj_stats = codegraph_mcp::hooks::claude_template::ProjectStats {
             total_nodes: stats_data.nodes,
             total_edges: stats_data.edges,
@@ -408,7 +407,7 @@ fn cmd_languages(db_path: &str) {
     let store = open_store(db_path);
     let stats = store
         .get_stats()
-        .unwrap_or_else(|_| codegraph_mcp::graph::store::GraphStats {
+        .unwrap_or(codegraph_mcp::graph::store::GraphStats {
             files: 0,
             nodes: 0,
             edges: 0,

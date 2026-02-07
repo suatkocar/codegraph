@@ -224,32 +224,34 @@ impl<'a> IndexingPipeline<'a> {
         let node_index = build_node_index(&all_nodes);
 
         // ---- Pass 2: extract edges & persist (parallel edge extraction) ----
-        let edge_results: Vec<Result<(String, Language, String, Vec<CodeNode>, Vec<CodeEdge>)>> =
-            parsed
-                .par_iter()
-                .map(|state| {
-                    // Each thread creates its own Parser (not Send/Sync)
-                    let parser = CodeParser::new();
-                    let tree = parser.parse(&state.source_text, state.language)?;
+        #[allow(clippy::type_complexity)]
+        let edge_results: Vec<
+            Result<(String, Language, String, Vec<CodeNode>, Vec<CodeEdge>)>,
+        > = parsed
+            .par_iter()
+            .map(|state| {
+                // Each thread creates its own Parser (not Send/Sync)
+                let parser = CodeParser::new();
+                let tree = parser.parse(&state.source_text, state.language)?;
 
-                    let edges = Extractor::extract_edges(
-                        &tree,
-                        &state.relative_path,
-                        state.language,
-                        &state.source_text,
-                        &state.nodes,
-                        &node_index,
-                    )?;
+                let edges = Extractor::extract_edges(
+                    &tree,
+                    &state.relative_path,
+                    state.language,
+                    &state.source_text,
+                    &state.nodes,
+                    &node_index,
+                )?;
 
-                    Ok((
-                        state.relative_path.clone(),
-                        state.language,
-                        state.content_hash.clone(),
-                        state.nodes.clone(),
-                        edges,
-                    ))
-                })
-                .collect();
+                Ok((
+                    state.relative_path.clone(),
+                    state.language,
+                    state.content_hash.clone(),
+                    state.nodes.clone(),
+                    edges,
+                ))
+            })
+            .collect();
 
         // ---- Persist to SQLite (sequential — single connection) ----
         let mut files_indexed = 0usize;
@@ -313,12 +315,12 @@ impl<'a> IndexingPipeline<'a> {
             None => return Ok(None),
         };
 
-        let metadata = fs::metadata(&abs_path).map_err(|e| CodeGraphError::Io(e))?;
+        let metadata = fs::metadata(&abs_path).map_err(CodeGraphError::Io)?;
         if metadata.len() > MAX_FILE_SIZE {
             return Ok(None);
         }
 
-        let source_text = fs::read_to_string(&abs_path).map_err(|e| CodeGraphError::Io(e))?;
+        let source_text = fs::read_to_string(&abs_path).map_err(CodeGraphError::Io)?;
         let content_hash = sha256_hex(&source_text);
 
         let rel_path = abs_path
@@ -443,7 +445,7 @@ fn collect_files(root: &Path) -> Vec<PathBuf> {
 
     let mut files = Vec::new();
     for entry in walker.flatten() {
-        if !entry.file_type().map_or(false, |ft| ft.is_file()) {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
         }
         let path = entry.path();

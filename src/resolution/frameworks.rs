@@ -490,10 +490,7 @@ fn detect_from_requirements_txt(path: &Path) -> Option<Vec<DetectedFramework>> {
             if pkg == def.dep_key {
                 let version = trimmed
                     .split(&['=', '>', '<', '!'][..])
-                    .filter(|s| {
-                        !s.is_empty() && s.chars().next().map_or(false, |c| c.is_ascii_digit())
-                    })
-                    .next()
+                    .find(|s| !s.is_empty() && s.chars().next().is_some_and(|c| c.is_ascii_digit()))
                     .map(|v| v.trim().to_string());
                 found.push(DetectedFramework {
                     name: def.name.to_string(),
