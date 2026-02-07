@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Pre-push hook — blocks push if fmt, clippy, or tests fail.
+
+set -e
+
+RED=$'\033[31m'
+GREEN=$'\033[32m'
+CYAN=$'\033[36m'
+RESET=$'\033[0m'
+
+info() { printf "${CYAN}[pre-push]${RESET} %s\n" "$1"; }
+pass() { printf "${GREEN}[pre-push]${RESET} %s\n" "$1"; }
+fail() { printf "${RED}[pre-push]${RESET} %s\n" "$1"; exit 1; }
+
+info "Running cargo fmt --check..."
+cargo fmt --check || fail "Formatting check failed. Run 'cargo fmt' first."
+pass "fmt ok"
+
+info "Running cargo clippy -- -D warnings..."
+cargo clippy -- -D warnings 2>&1 || fail "Clippy failed. Fix warnings first."
+pass "clippy ok"
+
+info "Running cargo test..."
+cargo test 2>&1 || fail "Tests failed."
+pass "tests ok"
+
+pass "All checks passed — pushing."
