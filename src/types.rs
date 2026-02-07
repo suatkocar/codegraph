@@ -267,6 +267,8 @@ impl std::fmt::Display for EdgeKind {
 pub struct CodeNode {
     pub id: String,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qualified_name: Option<String>,
     pub kind: NodeKind,
     pub file_path: String,
     pub start_line: u32,
@@ -334,6 +336,21 @@ pub struct FileRecord {
     pub indexed_at: i64,
     pub node_count: usize,
     pub edge_count: usize,
+}
+
+// ---------------------------------------------------------------------------
+// UnresolvedRef
+// ---------------------------------------------------------------------------
+
+/// An import or reference that could not be resolved to a known symbol.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnresolvedRef {
+    pub id: i64,
+    pub source_id: String,
+    pub specifier: String,
+    pub ref_type: String,
+    pub file_path: String,
+    pub line: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -440,6 +457,7 @@ mod tests {
         let node = CodeNode {
             id: "function:src/main.ts:hello:10".to_string(),
             name: "hello".to_string(),
+            qualified_name: None,
             kind: NodeKind::Function,
             file_path: "src/main.ts".to_string(),
             start_line: 10,
@@ -456,5 +474,6 @@ mod tests {
         let back: CodeNode = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id, node.id);
         assert_eq!(back.name, node.name);
+        assert_eq!(back.qualified_name, None);
     }
 }

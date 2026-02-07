@@ -813,6 +813,9 @@ impl CodeGraphServer {
             "exported": node.exported,
         });
 
+        if let Some(ref qn) = node.qualified_name {
+            result["qualifiedName"] = serde_json::json!(qn);
+        }
         if let Some(ref doc) = node.documentation {
             result["documentation"] = serde_json::json!(doc);
         }
@@ -1143,6 +1146,7 @@ mod tests {
         CodeNode {
             id: id.to_string(),
             name: name.to_string(),
+            qualified_name: None,
             kind,
             file_path: file.to_string(),
             start_line: line,
@@ -1167,6 +1171,7 @@ mod tests {
         CodeNode {
             id: id.to_string(),
             name: name.to_string(),
+            qualified_name: None,
             kind,
             file_path: file.to_string(),
             start_line: line,

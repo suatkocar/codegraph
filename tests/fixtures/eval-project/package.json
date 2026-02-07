@@ -1,0 +1,18 @@
+{
+  "name": "eval-project",
+  "version": "1.0.0",
+  "description": "Evaluation fixture project for CodeGraph-RS",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "jest": "^29.7.0",
+    "@types/express": "^4.17.21"
+  }
+}

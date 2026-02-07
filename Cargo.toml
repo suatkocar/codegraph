@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Suat Kocar"]
 description = "Codebase intelligence MCP server — semantic code graph with vector search"
 license = "MIT"
-repository = "https://github.com/suatkocar/codegraph-rs"
+repository = "https://github.com/suatkocar/codegraph"
 keywords = ["mcp", "claude", "code-intelligence", "tree-sitter", "semantic-search"]
 categories = ["development-tools", "command-line-utilities"]
 
@@ -50,6 +50,9 @@ schemars = "1.0"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
+dialoguer = "0.11"
+console = "0.15"
+indicatif = "0.17"
 
 # File watching
 notify = "8"
@@ -77,3 +80,8 @@ codegen-units = 1
 
 [dev-dependencies]
 tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "indexing_bench"
+harness = false

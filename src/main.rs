@@ -3,11 +3,13 @@ use std::process;
 
 use clap::{Parser, Subcommand};
 
+use codegraph_mcp::cli::installer;
 use codegraph_mcp::db::schema::initialize_database;
 use codegraph_mcp::graph::ranking::GraphRanking;
 use codegraph_mcp::graph::search::{HybridSearch, SearchOptions};
 use codegraph_mcp::graph::store::GraphStore;
-use codegraph_mcp::indexer::{IndexOptions, IndexingPipeline};
+use codegraph_mcp::indexer::{CodeParser, IndexOptions, IndexingPipeline};
+use codegraph_mcp::types::Language;
 
 #[derive(Parser)]
 #[command(name = "codegraph-mcp")]
@@ -27,6 +29,9 @@ enum Commands {
         /// Project directory (default: current dir)
         #[arg(default_value = ".")]
         directory: String,
+        /// Non-interactive mode (assume yes to all prompts)
+        #[arg(short = 'y', long = "yes")]
+        non_interactive: bool,
     },
     /// Index a codebase
     Index {
@@ -121,8 +126,11 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init { directory } => {
-            cmd_init(&directory);
+        Commands::Init {
+            directory,
+            non_interactive,
+        } => {
+            cmd_init(&directory, non_interactive);
         }
         Commands::Index { directory, force } => {
             cmd_index(&directory, force);
@@ -185,24 +193,100 @@ fn open_store(db_path: &str) -> GraphStore {
     GraphStore::from_connection(conn)
 }
 
-fn cmd_init(directory: &str) {
-    cmd_index(directory, false);
-    cmd_install_hooks(directory);
+fn cmd_init(directory: &str, non_interactive: bool) {
+    // Step 1: Print banner
+    installer::print_banner();
 
-    // Install git post-commit hook if in a git repo
-    if codegraph_mcp::hooks::git_hooks::is_git_repo(directory) {
-        if let Err(e) = codegraph_mcp::hooks::git_hooks::install_git_post_commit_hook(directory) {
-            eprintln!("[codegraph] Warning: git hook install failed: {}", e);
-        } else {
-            eprintln!("[codegraph] Git post-commit hook installed.");
+    // Step 2: Resolve project directory
+    let root = PathBuf::from(directory).canonicalize().unwrap_or_else(|e| {
+        eprintln!("Error: cannot resolve directory '{}': {}", directory, e);
+        process::exit(1);
+    });
+    let root_str = root.to_string_lossy().to_string();
+
+    // Step 3: Scan directory to detect languages
+    let file_paths = walkdir::WalkDir::new(&root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| {
+            let path = e.path().to_string_lossy().to_string();
+            CodeParser::detect_language(&path).map(|lang| (lang, path))
+        })
+        .collect::<Vec<(Language, String)>>();
+
+    // Build language counts
+    let mut lang_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (lang, _) in &file_paths {
+        *lang_counts.entry(lang.to_string()).or_default() += 1;
+    }
+    let mut lang_sorted: Vec<(String, usize)> = lang_counts.into_iter().collect();
+    lang_sorted.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Detect frameworks
+    let detected_frameworks =
+        codegraph_mcp::resolution::frameworks::detect_frameworks(directory);
+    let framework_names: Vec<String> = detected_frameworks
+        .iter()
+        .map(|f| f.name.clone())
+        .collect();
+
+    // Step 4: Print detection results
+    installer::print_project_detection(&root_str, &lang_sorted, &framework_names);
+
+    // Step 5: Confirm indexing
+    if !installer::confirm("Index this project?", non_interactive) {
+        println!("  Aborted.");
+        return;
+    }
+
+    // Step 6: Index with progress
+    let total_files = file_paths.len() as u64;
+    let spinner = installer::create_spinner(&format!("Indexing {} files...", total_files));
+    cmd_index(directory, false);
+    spinner.finish_and_clear();
+
+    // Get stats for summary
+    let db_path = root.join(".codegraph/codegraph.db");
+    let stats_data = if db_path.exists() {
+        let store = open_store(db_path.to_str().unwrap());
+        store
+            .get_stats()
+            .unwrap_or(codegraph_mcp::graph::store::GraphStats {
+                files: 0,
+                nodes: 0,
+                edges: 0,
+            })
+    } else {
+        codegraph_mcp::graph::store::GraphStats {
+            files: 0,
+            nodes: 0,
+            edges: 0,
+        }
+    };
+
+    // Step 7: Confirm hooks installation
+    let mut hooks_installed = false;
+    if installer::confirm("Install Claude Code hooks?", non_interactive) {
+        cmd_install_hooks(directory);
+        hooks_installed = true;
+    }
+
+    // Step 8: Git hook (only if .git exists)
+    let mut git_hook_installed = false;
+    let is_git = codegraph_mcp::hooks::git_hooks::is_git_repo(directory);
+    if is_git && installer::confirm("Install git post-commit hook?", non_interactive) {
+        match codegraph_mcp::hooks::git_hooks::install_git_post_commit_hook(directory) {
+            Ok(()) => git_hook_installed = true,
+            Err(e) => eprintln!("  Warning: git hook install failed: {}", e),
         }
     }
 
-    // Generate CLAUDE.md template
-    let db_path = PathBuf::from(directory).join(".codegraph/codegraph.db");
+    // Step 9: Generate CLAUDE.md
+    let mut claude_md_generated = false;
     if db_path.exists() {
         let store = open_store(db_path.to_str().unwrap());
-        let stats_data = store
+        let s = store
             .get_stats()
             .unwrap_or(codegraph_mcp::graph::store::GraphStats {
                 files: 0,
@@ -210,20 +294,27 @@ fn cmd_init(directory: &str) {
                 edges: 0,
             });
         let proj_stats = codegraph_mcp::hooks::claude_template::ProjectStats {
-            total_nodes: stats_data.nodes,
-            total_edges: stats_data.edges,
+            total_nodes: s.nodes,
+            total_edges: s.edges,
             ..Default::default()
         };
-        if let Err(e) =
-            codegraph_mcp::hooks::claude_template::generate_claude_md(directory, &proj_stats)
+        if codegraph_mcp::hooks::claude_template::generate_claude_md(directory, &proj_stats)
+            .is_ok()
         {
-            eprintln!("[codegraph] Warning: CLAUDE.md generation failed: {}", e);
-        } else {
-            eprintln!("[codegraph] CLAUDE.md template generated.");
+            claude_md_generated = true;
         }
     }
 
-    eprintln!("[codegraph] Ready. MCP server + hooks configured.");
+    // Step 10: Print summary
+    installer::print_summary(
+        stats_data.files,
+        stats_data.nodes,
+        stats_data.edges,
+        hooks_installed,
+        hooks_installed, // MCP is registered as part of hooks
+        claude_md_generated,
+        git_hook_installed,
+    );
 }
 
 fn cmd_install_hooks(directory: &str) {
@@ -473,8 +564,11 @@ fn cmd_stats(db_path: &str) {
         process::exit(1);
     });
 
+    let unresolved = store.get_unresolved_ref_count().unwrap_or(0);
+
     println!("CodeGraph Statistics");
-    println!("  Files:  {}", stats.files);
-    println!("  Nodes:  {}", stats.nodes);
-    println!("  Edges:  {}", stats.edges);
+    println!("  Files:       {}", stats.files);
+    println!("  Nodes:       {}", stats.nodes);
+    println!("  Edges:       {}", stats.edges);
+    println!("  Unresolved:  {}", unresolved);
 }

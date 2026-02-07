@@ -1,0 +1,37 @@
+{
+  "description": "Ground truth for CodeGraph evaluation on eval-project fixture",
+  "expected_node_count_min": 30,
+  "expected_edge_count_min": 20,
+  "search_queries": [
+    {
+      "query": "authentication",
+      "expected_top5_symbols": ["AuthService", "login", "verifyToken", "AuthMiddleware", "authenticate"],
+      "expected_top5_files": ["src/auth/service.ts", "src/auth/middleware.ts"]
+    },
+    {
+      "query": "database connection",
+      "expected_top5_symbols": ["Database", "connect", "query", "disconnect"],
+      "expected_top5_files": ["src/db/connection.ts"]
+    },
+    {
+      "query": "user repository",
+      "expected_top5_symbols": ["UserRepository", "findById", "create", "findByEmail"],
+      "expected_top5_files": ["src/db/user-repo.ts"]
+    }
+  ],
+  "callers": {
+    "login": ["handleLogin"],
+    "verifyToken": ["authenticate"],
+    "query": ["findById", "create", "findByEmail", "deleteById"]
+  },
+  "dead_code": ["unusedHelper", "deprecatedFunction", "UnusedFormatter"],
+  "file_dependencies": {
+    "src/auth/middleware.ts": ["src/auth/service.ts", "src/auth/types.ts", "src/utils/logger.ts"],
+    "src/auth/service.ts": ["src/auth/types.ts", "src/utils/crypto.ts", "src/utils/logger.ts"],
+    "src/api/handlers.ts": ["src/auth/service.ts", "src/db/user-repo.ts", "src/utils/logger.ts"],
+    "src/api/routes.ts": ["src/auth/middleware.ts", "src/api/handlers.ts", "src/auth/service.ts", "src/db/user-repo.ts", "src/utils/logger.ts"],
+    "src/db/user-repo.ts": ["src/db/connection.ts", "src/auth/types.ts", "src/utils/logger.ts"],
+    "src/index.ts": ["src/api/routes.ts", "src/auth/service.ts", "src/auth/middleware.ts", "src/db/connection.ts", "src/db/user-repo.ts", "src/utils/logger.ts"],
+    "src/utils/crypto.ts": ["src/utils/logger.ts"]
+  }
+}

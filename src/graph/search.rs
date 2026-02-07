@@ -437,6 +437,7 @@ mod tests {
         CodeNode {
             id: id.to_string(),
             name: name.to_string(),
+            qualified_name: None,
             kind,
             file_path: file.to_string(),
             start_line: line,

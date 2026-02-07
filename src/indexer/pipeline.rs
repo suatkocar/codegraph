@@ -290,11 +290,11 @@ impl<'a> IndexingPipeline<'a> {
             .collect();
         let all_edges_owned: Vec<CodeEdge> = all_edges.iter().map(|e| (*e).clone()).collect();
 
-        let resolved = resolve_imports(&all_edges_owned, &indexed_files, &node_index, &nodes_by_file);
+        let resolution_result = resolve_imports(&all_edges_owned, &indexed_files, &node_index, &nodes_by_file);
 
         // Group resolved edges by their source file for merging
         let mut resolved_by_file: HashMap<String, Vec<CodeEdge>> = HashMap::new();
-        for edge in resolved {
+        for edge in resolution_result.resolved_edges {
             resolved_by_file
                 .entry(edge.file_path.clone())
                 .or_default()
@@ -312,12 +312,26 @@ impl<'a> IndexingPipeline<'a> {
                 edges.extend(extra_edges);
             }
 
+            // Clear and persist unresolved refs for this file
+            self.store.clear_unresolved_refs_for_file(&rel_path)?;
+
             self.store.replace_file_data(&rel_path, &nodes, &edges)?;
             self.upsert_file_hash(&rel_path, &content_hash, language)?;
 
             nodes_created += nodes.len();
             edges_created += edges.len();
             files_indexed += 1;
+        }
+
+        // Persist unresolved refs
+        for uref in &resolution_result.unresolved_refs {
+            self.store.insert_unresolved_ref(
+                &uref.source_id,
+                &uref.specifier,
+                &uref.ref_type,
+                &uref.file_path,
+                uref.line,
+            )?;
         }
 
         // ---- Optional: generate embeddings ----
@@ -420,8 +434,20 @@ impl<'a> IndexingPipeline<'a> {
         }
         nodes_by_file.insert(rel_path.clone(), nodes.clone());
 
-        let resolved = resolve_imports(&edges, &indexed_files, &node_index, &nodes_by_file);
-        edges.extend(resolved);
+        let resolution_result = resolve_imports(&edges, &indexed_files, &node_index, &nodes_by_file);
+        edges.extend(resolution_result.resolved_edges);
+
+        // Clear and persist unresolved refs for this file
+        self.store.clear_unresolved_refs_for_file(&rel_path)?;
+        for uref in &resolution_result.unresolved_refs {
+            self.store.insert_unresolved_ref(
+                &uref.source_id,
+                &uref.specifier,
+                &uref.ref_type,
+                &uref.file_path,
+                uref.line,
+            )?;
+        }
 
         self.store.replace_file_data(&rel_path, &nodes, &edges)?;
         self.upsert_file_hash(&rel_path, &content_hash, language)?;

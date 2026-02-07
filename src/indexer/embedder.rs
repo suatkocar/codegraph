@@ -196,6 +196,7 @@ mod tests {
         CodeNode {
             id: format!("{}:{}:{}:1", kind.as_str(), file, name),
             name: name.to_string(),
+            qualified_name: None,
             kind,
             file_path: file.to_string(),
             start_line: 1,

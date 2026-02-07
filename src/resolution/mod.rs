@@ -3,3 +3,4 @@
 pub mod dead_code;
 pub mod frameworks;
 pub mod imports;
+pub mod routes;

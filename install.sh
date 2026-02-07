@@ -2,7 +2,7 @@
 # CodeGraph installer — downloads the latest release binary for your platform.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/suatkocar/codegraph-rs/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/suatkocar/codegraph/main/install.sh | bash
 #
 # Environment variables:
 #   CODEGRAPH_VERSION   — Version tag to install (default: latest)
@@ -10,7 +10,7 @@
 
 set -eo pipefail
 
-REPO="suatkocar/codegraph-rs"
+REPO="suatkocar/codegraph"
 BINARY="codegraph-mcp"
 INSTALL_DIR="${CODEGRAPH_INSTALL:-$HOME/.local/bin}"
 

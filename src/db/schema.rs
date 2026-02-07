@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL,
   name TEXT NOT NULL,
+  qualified_name TEXT,
   file_path TEXT NOT NULL,
   start_line INTEGER NOT NULL,
   end_line INTEGER NOT NULL,
@@ -56,6 +57,17 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
   FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
 )";
 
+const CREATE_UNRESOLVED_REFS: &str = "\
+CREATE TABLE IF NOT EXISTS unresolved_refs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id TEXT NOT NULL,
+  specifier TEXT NOT NULL,
+  ref_type TEXT NOT NULL DEFAULT 'import',
+  file_path TEXT NOT NULL,
+  line INTEGER DEFAULT 0,
+  FOREIGN KEY (source_id) REFERENCES nodes(id) ON DELETE CASCADE
+)";
+
 // Indexes ----------------------------------------------------------------
 
 const CREATE_INDEXES: &[&str] = &[
@@ -65,33 +77,34 @@ const CREATE_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id)",
     "CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id)",
     "CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type)",
+    "CREATE INDEX IF NOT EXISTS idx_unresolved_file ON unresolved_refs(file_path)",
 ];
 
 // FTS5 -------------------------------------------------------------------
 
 const CREATE_FTS: &str = "\
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_nodes USING fts5(
-  name, signature, doc_comment, file_path,
+  name, qualified_name, signature, doc_comment, file_path,
   content='nodes', content_rowid='rowid'
 )";
 
 const CREATE_FTS_TRIGGERS: &[&str] = &[
     "\
 CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON nodes BEGIN
-  INSERT INTO fts_nodes(rowid, name, signature, doc_comment, file_path)
-  VALUES (new.rowid, new.name, new.signature, new.doc_comment, new.file_path);
+  INSERT INTO fts_nodes(rowid, name, qualified_name, signature, doc_comment, file_path)
+  VALUES (new.rowid, new.name, new.qualified_name, new.signature, new.doc_comment, new.file_path);
 END",
     "\
 CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON nodes BEGIN
-  INSERT INTO fts_nodes(fts_nodes, rowid, name, signature, doc_comment, file_path)
-  VALUES ('delete', old.rowid, old.name, old.signature, old.doc_comment, old.file_path);
+  INSERT INTO fts_nodes(fts_nodes, rowid, name, qualified_name, signature, doc_comment, file_path)
+  VALUES ('delete', old.rowid, old.name, old.qualified_name, old.signature, old.doc_comment, old.file_path);
 END",
     "\
 CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON nodes BEGIN
-  INSERT INTO fts_nodes(fts_nodes, rowid, name, signature, doc_comment, file_path)
-  VALUES ('delete', old.rowid, old.name, old.signature, old.doc_comment, old.file_path);
-  INSERT INTO fts_nodes(rowid, name, signature, doc_comment, file_path)
-  VALUES (new.rowid, new.name, new.signature, new.doc_comment, new.file_path);
+  INSERT INTO fts_nodes(fts_nodes, rowid, name, qualified_name, signature, doc_comment, file_path)
+  VALUES ('delete', old.rowid, old.name, old.qualified_name, old.signature, old.doc_comment, old.file_path);
+  INSERT INTO fts_nodes(rowid, name, qualified_name, signature, doc_comment, file_path)
+  VALUES (new.rowid, new.name, new.qualified_name, new.signature, new.doc_comment, new.file_path);
 END",
 ];
 
@@ -166,6 +179,7 @@ pub fn initialize_database(db_path: &str) -> rusqlite::Result<Connection> {
     conn.execute_batch(CREATE_EDGES)?;
     conn.execute_batch(CREATE_FILE_HASHES)?;
     conn.execute_batch(CREATE_EMBEDDING_CACHE)?;
+    conn.execute_batch(CREATE_UNRESOLVED_REFS)?;
 
     // -- Indexes ----------------------------------------------------------
     for ddl in CREATE_INDEXES {
@@ -218,7 +232,7 @@ mod tests {
     #[test]
     fn core_tables_exist() {
         let conn = setup();
-        for table in &["nodes", "edges", "file_hashes", "embedding_cache"] {
+        for table in &["nodes", "edges", "file_hashes", "embedding_cache", "unresolved_refs"] {
             assert!(
                 object_exists(&conn, "table", table),
                 "table '{table}' should exist"
@@ -361,6 +375,7 @@ mod tests {
             "id",
             "type",
             "name",
+            "qualified_name",
             "file_path",
             "start_line",
             "end_line",

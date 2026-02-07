@@ -3,7 +3,7 @@
 **Codebase intelligence as an MCP server. Native Rust. Sub-second indexing. Zero runtime dependencies.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-266%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-314%20passing-brightgreen)]()
 [![Languages](https://img.shields.io/badge/languages-15-blue)]()
 
 ---
@@ -17,13 +17,13 @@ When Claude Code, Codex, or any MCP-compatible agent enters your project, CodeGr
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/suatkocar/codegraph-rs/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/suatkocar/codegraph/main/install.sh | bash
 ```
 
 Or build from source:
 
 ```bash
-cargo install --git https://github.com/suatkocar/codegraph-rs
+cargo install --git https://github.com/suatkocar/codegraph
 ```
 
 ## Quick Start
@@ -61,10 +61,36 @@ The PreCompact hook saves a PageRank summary of the most important symbols. Stru
 
 | Metric | Without CodeGraph | With CodeGraph | Improvement |
 |---|---|---|---|
+| Tokens per task | ~5,000 | ~1,550 | **68% fewer** |
+| Files examined | 11 (all) | 3 avg | **73% fewer** |
 | Index 30 files | N/A | **127ms** | Sub-second |
 | Incremental no-op | N/A | **12ms** | Instant |
 | Binary size | N/A | **29 MB** | Single file, no runtime |
 | CPU utilization | N/A | **600%+** | Parallel parsing via rayon |
+
+### Token Reduction Benchmarks
+
+Measured on a real 11-file TypeScript project with ground truth evaluation:
+
+| Task Query | Baseline Tokens | CodeGraph Tokens | Reduction |
+|---|---|---|---|
+| Authentication login | 4,962 | 1,997 | **59.8%** |
+| Database connection | 4,962 | 1,305 | **73.7%** |
+| User repository | 4,962 | 2,108 | **57.5%** |
+| API routes handlers | 4,962 | 935 | **81.2%** |
+| Password hashing | 4,962 | 1,522 | **69.3%** |
+| **Average** | | | **68.3%** |
+
+### Quality Metrics (Evaluation Framework)
+
+| Category | Precision | Recall | F1 Score |
+|---|---|---|---|
+| Caller detection | 1.00 | 1.00 | **1.00** |
+| Dead code detection | 0.75 | 1.00 | **0.86** |
+| Search relevance | 0.27 | 0.58 | **0.37** |
+| **Overall** | **0.51** | **0.65** | **0.56** |
+
+Caller detection achieves perfect precision and recall — CodeGraph never misses a caller and never hallucinates one. Dead code detection catches 100% of truly unused symbols. Search metrics are measured with keyword-only search (FTS5); hybrid search with embeddings scores higher.
 
 Embedding generation (Jina v2 Base Code, 768-dim ONNX) runs on first index. Subsequent incremental runs skip unchanged files entirely.
 
@@ -161,24 +187,30 @@ Source Files ──→ tree-sitter ──→ Extractor ──→ SQLite DB
 src/
   main.rs                 CLI entry point (16 commands, clap derive)
   mcp/server.rs           MCP server — 13 tools via rmcp #[tool] macros
-  db/schema.rs            SQLite schema — FTS5 + sqlite-vec virtual tables
+  db/schema.rs            SQLite schema — FTS5 + sqlite-vec + unresolved_refs
   indexer/
     parser.rs             15 tree-sitter grammars, statically linked
-    extractor.rs          AST → nodes and edges for all languages
+    extractor.rs          AST → nodes, edges, qualified names for all languages
     pipeline.rs           Parallel indexing with rayon + incremental SHA-256 hashing
     embedder.rs           Jina v2 Base Code embeddings (768-dim, ONNX)
   graph/
     store.rs              CRUD operations with prepare_cached
-    traversal.rs          Dependency/caller traversal via recursive CTEs
+    traversal.rs          Dependency/caller/callee traversal via recursive CTEs
     ranking.rs            PageRank, personalized PageRank, blast radius
     search.rs             Hybrid FTS5 + vector search, RRF fusion (k=60)
   context/
     assembler.rs          4-tier token-budgeted LLM context assembly
     budget.rs             Token estimation, truncation, signature extraction
   resolution/
-    imports.rs            Cross-file import path resolution
+    imports.rs            Cross-file import resolution + path alias support
+    routes.rs             Framework-specific route/component resolvers
     frameworks.rs         Framework detection (18+ frameworks from manifests)
     dead_code.rs          Unused symbol detection via edge analysis
+  eval/
+    harness.rs            Evaluation framework (precision/recall/F1)
+    token_benchmark.rs    Token reduction measurement vs baseline
+  cli/
+    installer.rs          Interactive installer with ASCII banner + progress bars
   hooks/
     install.rs            .mcp.json + .claude/settings.json + shell scripts
     handlers.rs           4 runtime handlers with catch_unwind safety
@@ -189,7 +221,8 @@ src/
 ## CLI Reference
 
 ```
-codegraph-mcp init <dir>              Full setup: index + hooks + MCP + git hooks + CLAUDE.md
+codegraph-mcp init <dir>              Full interactive setup (banner, prompts, progress bars)
+codegraph-mcp init <dir> --yes        Non-interactive setup (CI/scripting)
 codegraph-mcp index <dir>             Index a codebase (incremental by default)
 codegraph-mcp index <dir> --force     Force full re-index
 codegraph-mcp serve                   Start MCP server (stdio transport)
@@ -234,6 +267,25 @@ The context assembler builds structured Markdown that fits within a configurable
 | **Extended** | 20% | Related tests and sibling declarations |
 | **Background** | 15% | Project file listing for structural orientation |
 
+### Qualified Names
+
+Methods and properties are automatically assigned qualified names that chain through their enclosing types: `AuthService.login`, `Database.connect`, `Outer.Inner.method`. This improves search precision — querying for `AuthService.login` finds exactly the right symbol, not every `login` function in the project.
+
+### Framework-Specific Resolution
+
+Beyond generic import resolution, CodeGraph understands framework patterns:
+
+- **React/Next.js** — Resolves JSX component references (`<UserProfile />`) to their definitions
+- **Express** — Connects route handler registrations to handler functions
+- **Django** — Links URL patterns to view functions
+- **Rails** — Maps route definitions to controller actions
+- **Laravel** — Resolves route closures and controller references
+- **Spring Boot** — Connects `@RequestMapping` annotations to controller methods
+
+### Unresolved Reference Tracking
+
+Imports that can't be resolved to known symbols (external packages, missing files) are tracked in a dedicated `unresolved_refs` table. This provides visibility into dependency gaps and helps identify missing or misconfigured imports.
+
 ### Framework Detection
 
 CodeGraph analyzes manifest files (package.json, Cargo.toml, go.mod, requirements.txt, pom.xml, build.gradle, composer.json, Gemfile) to detect 18+ frameworks: React, Next.js, Vue, Angular, Express, NestJS, Django, Flask, FastAPI, Rails, Laravel, Symfony, Spring Boot, Actix, Axum, Rocket, Gin, Echo.
@@ -253,7 +305,7 @@ cargo build --release
 # Without embeddings (keyword-only search, ~29MB binary)
 cargo build --release --no-default-features
 
-# Run the test suite (266 tests)
+# Run the test suite (314 tests)
 cargo test
 ```
 
@@ -282,6 +334,8 @@ If you installed to a custom directory via `CODEGRAPH_INSTALL`, remove the binar
 - **Feature-gated embeddings.** Build with `--no-default-features` for a leaner binary that does keyword-only search.
 - **Hooks never panic.** Every handler uses `catch_unwind` and always returns valid JSON. CodeGraph never blocks your agent.
 - **Idempotent everything.** Running `init` twice produces the same result. Hooks are marker-based. Config merges are additive.
+- **Qualified names by containment.** `Class.method` names are derived from line-range enclosure, not AST parent-child — works across all 15 languages without language-specific logic.
+- **Interactive by default, scriptable with `--yes`.** The init command shows a banner, detects your project, and asks for confirmation. Pass `--yes` for CI/scripting.
 
 ## License
 

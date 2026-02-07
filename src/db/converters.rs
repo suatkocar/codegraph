@@ -26,6 +26,7 @@ pub fn row_to_code_node(row: &Row<'_>) -> rusqlite::Result<CodeNode> {
     let id: String = row.get("id")?;
     let kind_str: String = row.get("type")?;
     let name: String = row.get("name")?;
+    let qualified_name: Option<String> = row.get("qualified_name")?;
     let file_path: String = row.get("file_path")?;
     let start_line: u32 = row.get("start_line")?;
     let end_line: u32 = row.get("end_line")?;
@@ -53,6 +54,7 @@ pub fn row_to_code_node(row: &Row<'_>) -> rusqlite::Result<CodeNode> {
     Ok(CodeNode {
         id,
         name,
+        qualified_name,
         kind,
         file_path,
         start_line,

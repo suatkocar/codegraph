@@ -9,7 +9,7 @@ use rusqlite::{params, Connection};
 use crate::db::converters::{row_to_code_edge, row_to_code_node};
 use crate::db::schema::initialize_database;
 use crate::error::Result;
-use crate::types::{CodeEdge, CodeNode};
+use crate::types::{CodeEdge, CodeNode, UnresolvedRef};
 
 // ---------------------------------------------------------------------------
 // GraphStats
@@ -49,11 +49,12 @@ impl std::fmt::Debug for GraphStore {
 // ---------------------------------------------------------------------------
 
 const UPSERT_NODE_SQL: &str = "\
-INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language, signature, doc_comment, source_hash, metadata)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+INSERT INTO nodes (id, type, name, qualified_name, file_path, start_line, end_line, language, signature, doc_comment, source_hash, metadata)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
 ON CONFLICT(id) DO UPDATE SET
   type = excluded.type,
   name = excluded.name,
+  qualified_name = excluded.qualified_name,
   file_path = excluded.file_path,
   start_line = excluded.start_line,
   end_line = excluded.end_line,
@@ -197,6 +198,7 @@ impl GraphStore {
             node.id,
             node.kind.as_str(),
             node.name,
+            node.qualified_name,
             node.file_path,
             node.start_line,
             node.end_line,
@@ -235,6 +237,7 @@ impl GraphStore {
                     node.id,
                     node.kind.as_str(),
                     node.name,
+                    node.qualified_name,
                     node.file_path,
                     node.start_line,
                     node.end_line,
@@ -294,6 +297,7 @@ impl GraphStore {
                     node.id,
                     node.kind.as_str(),
                     node.name,
+                    node.qualified_name,
                     node.file_path,
                     node.start_line,
                     node.end_line,
@@ -487,6 +491,87 @@ impl GraphStore {
             files: self.get_file_count()?,
         })
     }
+
+    // -------------------------------------------------------------------
+    // Unresolved references
+    // -------------------------------------------------------------------
+
+    /// Insert a single unresolved reference.
+    pub fn insert_unresolved_ref(
+        &self,
+        source_id: &str,
+        specifier: &str,
+        ref_type: &str,
+        file_path: &str,
+        line: u32,
+    ) -> Result<()> {
+        let mut stmt = self.conn.prepare_cached(
+            "INSERT INTO unresolved_refs (source_id, specifier, ref_type, file_path, line) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        stmt.execute(params![source_id, specifier, ref_type, file_path, line])?;
+        Ok(())
+    }
+
+    /// Get unresolved references, optionally filtered by file path.
+    pub fn get_unresolved_refs(&self, file_path: Option<&str>) -> Result<Vec<UnresolvedRef>> {
+        match file_path {
+            Some(fp) => {
+                let mut stmt = self.conn.prepare_cached(
+                    "SELECT id, source_id, specifier, ref_type, file_path, line \
+                     FROM unresolved_refs WHERE file_path = ?1",
+                )?;
+                let rows = stmt.query_map(params![fp], |row| {
+                    Ok(UnresolvedRef {
+                        id: row.get(0)?,
+                        source_id: row.get(1)?,
+                        specifier: row.get(2)?,
+                        ref_type: row.get(3)?,
+                        file_path: row.get(4)?,
+                        line: row.get(5)?,
+                    })
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            }
+            None => {
+                let mut stmt = self.conn.prepare_cached(
+                    "SELECT id, source_id, specifier, ref_type, file_path, line \
+                     FROM unresolved_refs",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(UnresolvedRef {
+                        id: row.get(0)?,
+                        source_id: row.get(1)?,
+                        specifier: row.get(2)?,
+                        ref_type: row.get(3)?,
+                        file_path: row.get(4)?,
+                        line: row.get(5)?,
+                    })
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            }
+        }
+    }
+
+    /// Clear all unresolved references for a given file path.
+    pub fn clear_unresolved_refs_for_file(&self, file_path: &str) -> Result<()> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("DELETE FROM unresolved_refs WHERE file_path = ?1")?;
+        stmt.execute(params![file_path])?;
+        Ok(())
+    }
+
+    /// Get the total count of unresolved references.
+    pub fn get_unresolved_ref_count(&self) -> Result<usize> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT count(*) FROM unresolved_refs")?;
+        let count: i64 = stmt.query_row([], |row| row.get(0))?;
+        Ok(count as usize)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +594,7 @@ mod tests {
         CodeNode {
             id: id.to_string(),
             name: name.to_string(),
+            qualified_name: None,
             kind,
             file_path: file.to_string(),
             start_line: line,
@@ -862,5 +948,68 @@ mod tests {
             .trim_start_matches('-')
             .chars()
             .all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    // -- unresolved refs ------------------------------------------------------
+
+    #[test]
+    fn insert_and_get_unresolved_refs() {
+        let store = setup();
+
+        store
+            .insert_unresolved_ref("file:main.ts", "./missing", "import", "main.ts", 5)
+            .unwrap();
+        store
+            .insert_unresolved_ref("file:main.ts", "./gone", "import", "main.ts", 10)
+            .unwrap();
+
+        let refs = store.get_unresolved_refs(None).unwrap();
+        assert_eq!(refs.len(), 2);
+
+        let refs_for_file = store.get_unresolved_refs(Some("main.ts")).unwrap();
+        assert_eq!(refs_for_file.len(), 2);
+
+        let refs_other = store.get_unresolved_refs(Some("other.ts")).unwrap();
+        assert!(refs_other.is_empty());
+    }
+
+    #[test]
+    fn clear_unresolved_refs_for_file() {
+        let store = setup();
+
+        store
+            .insert_unresolved_ref("file:a.ts", "./x", "import", "a.ts", 1)
+            .unwrap();
+        store
+            .insert_unresolved_ref("file:b.ts", "./y", "import", "b.ts", 2)
+            .unwrap();
+
+        assert_eq!(store.get_unresolved_ref_count().unwrap(), 2);
+
+        store.clear_unresolved_refs_for_file("a.ts").unwrap();
+
+        assert_eq!(store.get_unresolved_ref_count().unwrap(), 1);
+        let refs = store.get_unresolved_refs(Some("a.ts")).unwrap();
+        assert!(refs.is_empty());
+
+        let refs_b = store.get_unresolved_refs(Some("b.ts")).unwrap();
+        assert_eq!(refs_b.len(), 1);
+    }
+
+    #[test]
+    fn get_unresolved_ref_count() {
+        let store = setup();
+
+        assert_eq!(store.get_unresolved_ref_count().unwrap(), 0);
+
+        store
+            .insert_unresolved_ref("file:a.ts", "./x", "import", "a.ts", 1)
+            .unwrap();
+        assert_eq!(store.get_unresolved_ref_count().unwrap(), 1);
+
+        store
+            .insert_unresolved_ref("file:a.ts", "./y", "import", "a.ts", 2)
+            .unwrap();
+        assert_eq!(store.get_unresolved_ref_count().unwrap(), 2);
     }
 }
