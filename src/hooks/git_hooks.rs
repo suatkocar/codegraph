@@ -63,10 +63,7 @@ pub fn install_git_post_commit_hook(project_dir: &str) -> Result<()> {
     }
 
     fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))?;
-    tracing::info!(
-        "Installed post-commit hook at {}",
-        hook_path.display()
-    );
+    tracing::info!("Installed post-commit hook at {}", hook_path.display());
     Ok(())
 }
 
@@ -265,5 +262,153 @@ mod tests {
 
         let content = fs::read_to_string(&hook).unwrap();
         assert!(content.contains("echo hello"), "file should be untouched");
+    }
+
+    // -- Additional git hook tests (Phase 18D) --------------------------------
+
+    #[test]
+    fn marker_constant_is_a_comment() {
+        assert!(MARKER.starts_with('#'), "MARKER should be a shell comment");
+    }
+
+    #[test]
+    fn marker_contains_codegraph() {
+        assert!(
+            MARKER.contains("codegraph"),
+            "MARKER should contain 'codegraph' for identification"
+        );
+    }
+
+    #[test]
+    fn install_creates_hooks_dir_if_missing() {
+        let tmp = TempDir::new().unwrap();
+        // Create .git but NOT .git/hooks
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+
+        let dir = tmp.path().to_str().unwrap();
+        install_git_post_commit_hook(dir).unwrap();
+
+        assert!(tmp.path().join(".git/hooks/post-commit").exists());
+    }
+
+    #[test]
+    fn install_hook_content_contains_project_dir() {
+        let tmp = TempDir::new().unwrap();
+        make_git_dir(&tmp);
+        let dir = tmp.path().to_str().unwrap();
+
+        install_git_post_commit_hook(dir).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join(".git/hooks/post-commit")).unwrap();
+        assert!(
+            content.contains(dir),
+            "Hook should reference the project directory"
+        );
+    }
+
+    #[test]
+    fn install_hook_runs_in_background() {
+        let tmp = TempDir::new().unwrap();
+        make_git_dir(&tmp);
+        let dir = tmp.path().to_str().unwrap();
+
+        install_git_post_commit_hook(dir).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join(".git/hooks/post-commit")).unwrap();
+        assert!(
+            content.contains('&'),
+            "Hook should run codegraph in background"
+        );
+    }
+
+    #[test]
+    fn install_hook_redirects_stderr() {
+        let tmp = TempDir::new().unwrap();
+        make_git_dir(&tmp);
+        let dir = tmp.path().to_str().unwrap();
+
+        install_git_post_commit_hook(dir).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join(".git/hooks/post-commit")).unwrap();
+        assert!(
+            content.contains("2>/dev/null"),
+            "Hook should redirect stderr to /dev/null"
+        );
+    }
+
+    #[test]
+    fn uninstall_then_install_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        make_git_dir(&tmp);
+        let dir = tmp.path().to_str().unwrap();
+
+        install_git_post_commit_hook(dir).unwrap();
+        assert!(tmp.path().join(".git/hooks/post-commit").exists());
+
+        uninstall_git_post_commit_hook(dir).unwrap();
+        assert!(!tmp.path().join(".git/hooks/post-commit").exists());
+
+        install_git_post_commit_hook(dir).unwrap();
+        assert!(tmp.path().join(".git/hooks/post-commit").exists());
+
+        let content = fs::read_to_string(tmp.path().join(".git/hooks/post-commit")).unwrap();
+        assert_eq!(
+            content.matches(MARKER).count(),
+            1,
+            "Should have exactly one marker after reinstall"
+        );
+    }
+
+    #[test]
+    fn uninstall_preserves_other_hooks_content() {
+        let tmp = TempDir::new().unwrap();
+        make_git_dir(&tmp);
+        let dir = tmp.path().to_str().unwrap();
+
+        // Create a hook with multiple user commands + our codegraph line
+        let hook = tmp.path().join(".git/hooks/post-commit");
+        let content = format!(
+            "#!/usr/bin/env bash\n\
+             echo 'running lint'\n\
+             npm run test\n\
+             \n\
+             {MARKER}\n\
+             codegraph index {dir} 2>/dev/null &\n\
+             \n\
+             echo 'done'\n"
+        );
+        fs::write(&hook, content).unwrap();
+
+        uninstall_git_post_commit_hook(dir).unwrap();
+
+        let remaining = fs::read_to_string(&hook).unwrap();
+        assert!(remaining.contains("echo 'running lint'"));
+        assert!(remaining.contains("npm run test"));
+        assert!(remaining.contains("echo 'done'"));
+        assert!(!remaining.contains(MARKER));
+        assert!(!remaining.contains("codegraph index"));
+    }
+
+    #[test]
+    fn is_git_repo_with_git_file() {
+        // A directory with a .git *file* (submodule) vs .git *directory*
+        let tmp = TempDir::new().unwrap();
+        // .git as a file, not directory
+        fs::write(tmp.path().join(".git"), "gitdir: /some/path").unwrap();
+        // is_git_repo checks for .git being a *directory*
+        assert!(!is_git_repo(tmp.path().to_str().unwrap()));
+    }
+
+    #[test]
+    fn install_with_absolute_project_path() {
+        let tmp = TempDir::new().unwrap();
+        make_git_dir(&tmp);
+        let dir = tmp.path().canonicalize().unwrap();
+        let dir_str = dir.to_str().unwrap();
+
+        install_git_post_commit_hook(dir_str).unwrap();
+
+        let content = fs::read_to_string(dir.join(".git/hooks/post-commit")).unwrap();
+        assert!(content.contains("codegraph index"));
     }
 }

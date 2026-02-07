@@ -557,4 +557,245 @@ mod tests {
             1
         );
     }
+
+    // -- Additional hooks tests (Phase 18D) -----------------------------------
+
+    #[test]
+    fn all_hook_scripts_are_generated() {
+        assert_eq!(
+            HOOK_SCRIPTS.len(),
+            10,
+            "Should have exactly 10 hook scripts"
+        );
+    }
+
+    #[test]
+    fn hook_scripts_have_unique_filenames() {
+        let filenames: Vec<&str> = HOOK_SCRIPTS.iter().map(|h| h.filename).collect();
+        let unique: std::collections::HashSet<&str> = filenames.iter().copied().collect();
+        assert_eq!(
+            filenames.len(),
+            unique.len(),
+            "Hook script filenames should be unique"
+        );
+    }
+
+    #[test]
+    fn hook_scripts_have_unique_subcommands() {
+        let subs: Vec<&str> = HOOK_SCRIPTS.iter().map(|h| h.subcommand).collect();
+        let unique: std::collections::HashSet<&str> = subs.iter().copied().collect();
+        assert_eq!(
+            subs.len(),
+            unique.len(),
+            "Hook script subcommands should be unique"
+        );
+    }
+
+    #[test]
+    fn render_script_contains_shebang() {
+        let hook = &HOOK_SCRIPTS[0];
+        let script = render_script(hook, "codegraph");
+        assert!(script.starts_with("#!/usr/bin/env bash"));
+    }
+
+    #[test]
+    fn render_script_contains_fallback() {
+        let hook = &HOOK_SCRIPTS[0];
+        let script = render_script(hook, "codegraph");
+        assert!(
+            script.contains(r#"{"continue":true}"#),
+            "Script should have fallback JSON"
+        );
+    }
+
+    #[test]
+    fn render_script_uses_env_variable() {
+        let hook = &HOOK_SCRIPTS[0];
+        let script = render_script(hook, "/custom/path");
+        assert!(
+            script.contains("CODEGRAPH_BIN"),
+            "Script should reference CODEGRAPH_BIN env var"
+        );
+        assert!(
+            script.contains("/custom/path"),
+            "Script should use the provided binary path as default"
+        );
+    }
+
+    #[test]
+    fn build_hooks_value_has_all_events() {
+        let hooks = build_hooks_value();
+        let expected_events = [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreCompact",
+            "PostToolUse",
+            "PreToolUse",
+            "SubagentStart",
+            "PostToolUseFailure",
+            "Stop",
+            "TaskCompleted",
+            "SessionEnd",
+        ];
+        for event in &expected_events {
+            assert!(
+                hooks[event].is_array(),
+                "hooks value should contain '{}' as array",
+                event
+            );
+        }
+    }
+
+    #[test]
+    fn build_hooks_value_post_tool_use_has_matcher() {
+        let hooks = build_hooks_value();
+        assert_eq!(
+            hooks["PostToolUse"][0]["matcher"],
+            json!("Write|Edit"),
+            "PostToolUse should match Write|Edit"
+        );
+    }
+
+    #[test]
+    fn build_hooks_value_pre_tool_use_has_matcher() {
+        let hooks = build_hooks_value();
+        assert_eq!(
+            hooks["PreToolUse"][0]["matcher"],
+            json!("Edit|Write|Read|Grep|Glob|Bash"),
+            "PreToolUse should match tool types"
+        );
+    }
+
+    #[test]
+    fn build_mcp_server_value_structure() {
+        let mcp = build_mcp_server_value("/usr/bin/codegraph");
+        assert_eq!(mcp["command"], json!("/usr/bin/codegraph"));
+        assert_eq!(mcp["args"], json!(["serve"]));
+        assert!(mcp["env"].is_object());
+        assert_eq!(mcp["env"]["CODEGRAPH_DB"], json!(".codegraph/codegraph.db"));
+    }
+
+    #[test]
+    fn merge_object_key_creates_new_key() {
+        let mut root = json!({"existing": 42});
+        merge_object_key(&mut root, "new_key", json!({"a": 1}));
+        assert_eq!(root["new_key"]["a"], json!(1));
+        assert_eq!(root["existing"], json!(42));
+    }
+
+    #[test]
+    fn merge_object_key_deep_merge() {
+        let mut root = json!({
+            "hooks": {
+                "A": {"x": 1},
+                "B": {"y": 2}
+            }
+        });
+        merge_object_key(&mut root, "hooks", json!({"C": {"z": 3}}));
+        assert_eq!(root["hooks"]["A"]["x"], json!(1), "A preserved");
+        assert_eq!(root["hooks"]["B"]["y"], json!(2), "B preserved");
+        assert_eq!(root["hooks"]["C"]["z"], json!(3), "C added");
+    }
+
+    #[test]
+    fn read_json_or_empty_object_with_missing_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("nonexistent.json");
+        let val = read_json_or_empty_object(&path).unwrap();
+        assert!(val.is_object());
+        assert!(val.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn read_json_or_empty_object_with_empty_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("empty.json");
+        fs::write(&path, "").unwrap();
+        let val = read_json_or_empty_object(&path).unwrap();
+        assert!(val.is_object());
+        assert!(val.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn read_json_or_empty_object_with_whitespace_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("whitespace.json");
+        fs::write(&path, "   \n\t  ").unwrap();
+        let val = read_json_or_empty_object(&path).unwrap();
+        assert!(val.is_object());
+        assert!(val.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn read_json_or_empty_object_with_valid_json() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("valid.json");
+        fs::write(&path, r#"{"key": "value"}"#).unwrap();
+        let val = read_json_or_empty_object(&path).unwrap();
+        assert_eq!(val["key"], json!("value"));
+    }
+
+    #[test]
+    fn settings_includes_stop_and_task_completed() {
+        let tmp = TempDir::new().unwrap();
+        let settings_path = tmp.path().join(".claude").join("settings.json");
+        merge_settings(&settings_path).unwrap();
+
+        let parsed: Value =
+            serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert!(parsed["hooks"]["Stop"].is_array(), "Stop hook missing");
+        assert!(
+            parsed["hooks"]["TaskCompleted"].is_array(),
+            "TaskCompleted hook missing"
+        );
+        assert!(
+            parsed["hooks"]["SessionEnd"].is_array(),
+            "SessionEnd hook missing"
+        );
+    }
+
+    #[test]
+    fn mcp_config_has_correct_env() {
+        let tmp = TempDir::new().unwrap();
+        let mcp_path = tmp.path().join(".mcp.json");
+        merge_mcp_config(&mcp_path, "codegraph").unwrap();
+
+        let parsed: Value = serde_json::from_str(&fs::read_to_string(&mcp_path).unwrap()).unwrap();
+        let env = &parsed["mcpServers"]["codegraph"]["env"];
+        assert_eq!(env["CODEGRAPH_DB"], json!(".codegraph/codegraph.db"));
+    }
+
+    #[test]
+    fn shell_script_stderr_redirect() {
+        for hook in HOOK_SCRIPTS {
+            let script = render_script(hook, "codegraph");
+            assert!(
+                script.contains("2>/dev/null"),
+                "{} should redirect stderr",
+                hook.filename
+            );
+        }
+    }
+
+    #[test]
+    fn shell_scripts_all_end_with_sh() {
+        for hook in HOOK_SCRIPTS {
+            assert!(
+                hook.filename.ends_with(".sh"),
+                "Hook filename '{}' should end with .sh",
+                hook.filename
+            );
+        }
+    }
+
+    #[test]
+    fn shell_scripts_subcommands_start_with_hook() {
+        for hook in HOOK_SCRIPTS {
+            assert!(
+                hook.subcommand.starts_with("hook-"),
+                "Subcommand '{}' should start with 'hook-'",
+                hook.subcommand
+            );
+        }
+    }
 }

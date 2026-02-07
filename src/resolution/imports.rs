@@ -818,6 +818,238 @@ mod tests {
         );
     }
 
+    // -- Additional import tests (Phase 18D) ---------------------------------
+
+    #[test]
+    fn normalize_empty_path() {
+        assert_eq!(normalize_path(""), "");
+    }
+
+    #[test]
+    fn normalize_single_component() {
+        assert_eq!(normalize_path("src"), "src");
+    }
+
+    #[test]
+    fn normalize_trailing_dotdot_empties_path() {
+        assert_eq!(normalize_path("src/.."), "");
+    }
+
+    #[test]
+    fn normalize_many_current_dirs() {
+        assert_eq!(normalize_path("./././src/./utils"), "src/utils");
+    }
+
+    #[test]
+    fn is_relative_import_edge_cases() {
+        assert!(!is_relative_import(""));
+        assert!(!is_relative_import("/absolute/path"));
+        assert!(!is_relative_import("@scope/package"));
+        assert!(is_relative_import("./"));
+        assert!(is_relative_import("../"));
+        assert!(is_relative_import("../../../deep"));
+    }
+
+    #[test]
+    fn is_path_alias_edge_cases() {
+        assert!(!is_path_alias(""));
+        assert!(!is_path_alias("@types/node")); // scoped package, not alias
+        assert!(!is_path_alias("@"));
+        assert!(!is_path_alias("~"));
+        assert!(is_path_alias("@/"));
+        assert!(is_path_alias("~/"));
+    }
+
+    #[test]
+    fn resolve_path_alias_passthrough() {
+        // Non-alias specifiers pass through unchanged
+        assert_eq!(resolve_path_alias("express"), "express");
+        assert_eq!(resolve_path_alias("./utils"), "./utils");
+    }
+
+    #[test]
+    fn resolves_python_extension() {
+        let files: HashSet<String> = ["src/utils.py", "src/main.py"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let result = resolve_specifier("src/main.py", "./utils", &files);
+        assert_eq!(result, Some("src/utils.py".to_string()));
+    }
+
+    #[test]
+    fn resolves_go_extension() {
+        let files: HashSet<String> = ["pkg/utils.go", "cmd/main.go"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let result = resolve_specifier("cmd/main.go", "../pkg/utils", &files);
+        assert_eq!(result, Some("pkg/utils.go".to_string()));
+    }
+
+    #[test]
+    fn resolves_ruby_extension() {
+        let files: HashSet<String> = ["lib/utils.rb", "app/main.rb"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let result = resolve_specifier("app/main.rb", "../lib/utils", &files);
+        assert_eq!(result, Some("lib/utils.rb".to_string()));
+    }
+
+    #[test]
+    fn resolves_jsx_extension() {
+        let files: HashSet<String> = ["src/App.jsx", "src/index.js"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let result = resolve_specifier("src/index.js", "./App", &files);
+        assert_eq!(result, Some("src/App.jsx".to_string()));
+    }
+
+    #[test]
+    fn resolves_tsx_extension() {
+        let files: HashSet<String> = ["src/App.tsx", "src/index.ts"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let result = resolve_specifier("src/index.ts", "./App", &files);
+        assert_eq!(result, Some("src/App.tsx".to_string()));
+    }
+
+    #[test]
+    fn resolves_mjs_extension() {
+        let files: HashSet<String> = ["src/utils.mjs", "src/main.mjs"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let result = resolve_specifier("src/main.mjs", "./utils", &files);
+        assert_eq!(result, Some("src/utils.mjs".to_string()));
+    }
+
+    #[test]
+    fn resolves_index_tsx_barrel() {
+        let files: HashSet<String> = ["src/components/index.tsx", "src/main.ts"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let result = resolve_specifier("src/main.ts", "./components", &files);
+        assert_eq!(result, Some("src/components/index.tsx".to_string()));
+    }
+
+    #[test]
+    fn resolves_index_js_barrel() {
+        let files: HashSet<String> = ["src/utils/index.js", "src/app.js"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let result = resolve_specifier("src/app.js", "./utils", &files);
+        assert_eq!(result, Some("src/utils/index.js".to_string()));
+    }
+
+    #[test]
+    fn import_resolution_result_is_empty_for_non_module_targets() {
+        // Edges whose target doesn't start with "module:" are skipped entirely
+        let edges = vec![CodeEdge {
+            source: "fn:a.ts:foo:1".to_string(),
+            target: "fn:b.ts:bar:1".to_string(),
+            kind: EdgeKind::Imports,
+            file_path: "a.ts".to_string(),
+            line: 1,
+            metadata: None,
+        }];
+        let indexed_files: HashSet<String> =
+            ["a.ts", "b.ts"].iter().map(|s| s.to_string()).collect();
+        let node_index: HashMap<String, Vec<CodeNode>> = HashMap::new();
+        let nodes_by_file: HashMap<String, Vec<CodeNode>> = HashMap::new();
+
+        let result = resolve_imports(&edges, &indexed_files, &node_index, &nodes_by_file);
+        assert!(result.resolved_edges.is_empty());
+        assert!(result.unresolved_refs.is_empty());
+    }
+
+    #[test]
+    fn wildcard_import_ignores_non_exported() {
+        let exported = make_node("fn1", "pubFn", "src/lib.ts", NodeKind::Function, Some(true));
+        let private1 = make_node("fn2", "pvtFn1", "src/lib.ts", NodeKind::Function, None);
+        let private2 = make_node(
+            "fn3",
+            "pvtFn2",
+            "src/lib.ts",
+            NodeKind::Function,
+            Some(false),
+        );
+
+        let edges = vec![make_import_edge("src/app.ts", "./lib", 1, None)];
+        let indexed_files: HashSet<String> = ["src/app.ts", "src/lib.ts"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let node_index: HashMap<String, Vec<CodeNode>> = HashMap::new();
+        let mut nodes_by_file: HashMap<String, Vec<CodeNode>> = HashMap::new();
+        nodes_by_file.insert("src/lib.ts".to_string(), vec![exported, private1, private2]);
+
+        let result = resolve_imports(&edges, &indexed_files, &node_index, &nodes_by_file);
+        // Only the exported function should be linked
+        assert_eq!(result.resolved_edges.len(), 1);
+        assert_eq!(result.resolved_edges[0].target, "fn1");
+    }
+
+    #[test]
+    fn named_import_falls_back_to_global_index() {
+        // Name not in target file nodes, but exists in global index
+        let elsewhere = make_node(
+            "fn:src/utils.ts:helper:1",
+            "helper",
+            "src/utils.ts",
+            NodeKind::Function,
+            Some(true),
+        );
+
+        let edges = vec![make_import_edge("src/app.ts", "./utils", 1, Some("helper"))];
+        let indexed_files: HashSet<String> = ["src/app.ts", "src/utils.ts"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut node_index: HashMap<String, Vec<CodeNode>> = HashMap::new();
+        node_index.insert("helper".to_string(), vec![elsewhere]);
+        // Empty nodes_by_file for the target — forces fallback to node_index
+        let nodes_by_file: HashMap<String, Vec<CodeNode>> = HashMap::new();
+
+        let result = resolve_imports(&edges, &indexed_files, &node_index, &nodes_by_file);
+        assert_eq!(result.resolved_edges.len(), 1);
+        assert_eq!(result.resolved_edges[0].target, "fn:src/utils.ts:helper:1");
+    }
+
+    #[test]
+    fn tilde_alias_resolves_correctly() {
+        let button = make_node(
+            "fn:src/components/Button.tsx:Button:1",
+            "Button",
+            "src/components/Button.tsx",
+            NodeKind::Function,
+            Some(true),
+        );
+
+        let edges = vec![make_import_edge(
+            "src/pages/Home.tsx",
+            "~/components/Button",
+            1,
+            Some("Button"),
+        )];
+        let indexed_files: HashSet<String> = ["src/pages/Home.tsx", "src/components/Button.tsx"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut node_index: HashMap<String, Vec<CodeNode>> = HashMap::new();
+        node_index.insert("Button".to_string(), vec![button.clone()]);
+        let mut nodes_by_file: HashMap<String, Vec<CodeNode>> = HashMap::new();
+        nodes_by_file.insert("src/components/Button.tsx".to_string(), vec![button]);
+
+        let result = resolve_imports(&edges, &indexed_files, &node_index, &nodes_by_file);
+        assert_eq!(result.resolved_edges.len(), 1);
+    }
+
     #[test]
     fn resolve_barrel_named_reexport() {
         let foo = make_node(

@@ -369,7 +369,10 @@ pub fn handle_post_edit() {
             Ok(Some(result)) => {
                 tracing::info!(
                     "post_edit: re-indexed {} ({} nodes, {} edges) in {}ms",
-                    file_path, result.nodes_created, result.edges_created, result.duration_ms,
+                    file_path,
+                    result.nodes_created,
+                    result.edges_created,
+                    result.duration_ms,
                 );
             }
             Ok(None) => {
@@ -971,7 +974,12 @@ pub fn handle_session_end() {
         tracing::info!(
             "session_end: final index -- {} files in {}ms \
              (total: {} files, {} nodes, {} edges, {} unresolved)",
-            files_indexed, elapsed, stats.files, stats.nodes, stats.edges, unresolved,
+            files_indexed,
+            elapsed,
+            stats.files,
+            stats.nodes,
+            stats.edges,
+            unresolved,
         );
 
         emit(json!({"continue": true}));

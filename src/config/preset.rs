@@ -129,10 +129,7 @@ pub fn security_preset() -> PresetDefinition {
 
 /// Return the set of enabled category names for a preset.
 pub fn enabled_categories(name: &PresetName) -> HashSet<&'static str> {
-    get_preset(name)
-        .enabled_categories
-        .into_iter()
-        .collect()
+    get_preset(name).enabled_categories.into_iter().collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +180,10 @@ mod tests {
         assert_eq!(p.name, PresetName::Full);
         assert_eq!(p.enabled_categories.len(), ALL_CATEGORIES.len());
         for cat in ALL_CATEGORIES {
-            assert!(p.enabled_categories.contains(cat), "missing category: {cat}");
+            assert!(
+                p.enabled_categories.contains(cat),
+                "missing category: {cat}"
+            );
         }
     }
 
@@ -217,7 +217,10 @@ mod tests {
         assert_eq!(get_preset(&PresetName::Minimal).name, PresetName::Minimal);
         assert_eq!(get_preset(&PresetName::Balanced).name, PresetName::Balanced);
         assert_eq!(get_preset(&PresetName::Full).name, PresetName::Full);
-        assert_eq!(get_preset(&PresetName::SecurityFocused).name, PresetName::SecurityFocused);
+        assert_eq!(
+            get_preset(&PresetName::SecurityFocused).name,
+            PresetName::SecurityFocused
+        );
     }
 
     #[test]
@@ -274,5 +277,248 @@ mod tests {
         let f = full_preset();
         assert!(m.tool_count < b.tool_count);
         assert!(s.tool_count < f.tool_count);
+    }
+
+    // ====================================================================
+    // Phase 18B — extended preset tests
+    // ====================================================================
+
+    use pretty_assertions::assert_eq as pa_eq;
+    use test_case::test_case;
+
+    // --- Each preset has valid name ---
+
+    #[test_case(PresetName::Minimal ; "minimal has correct name")]
+    #[test_case(PresetName::Balanced ; "balanced has correct name")]
+    #[test_case(PresetName::Full ; "full has correct name")]
+    #[test_case(PresetName::SecurityFocused ; "security has correct name")]
+    fn get_preset_returns_matching_name(name: PresetName) {
+        let p = get_preset(&name);
+        pa_eq!(p.name, name);
+    }
+
+    // --- All presets have non-zero tool counts ---
+
+    #[test_case(PresetName::Minimal ; "minimal tools gt 0")]
+    #[test_case(PresetName::Balanced ; "balanced tools gt 0")]
+    #[test_case(PresetName::Full ; "full tools gt 0")]
+    #[test_case(PresetName::SecurityFocused ; "security tools gt 0")]
+    fn preset_tool_count_positive(name: PresetName) {
+        let p = get_preset(&name);
+        assert!(p.tool_count > 0, "tool_count should be > 0 for {:?}", name);
+    }
+
+    // --- All presets have non-zero estimated_tokens ---
+
+    #[test_case(PresetName::Minimal ; "minimal tokens gt 0")]
+    #[test_case(PresetName::Balanced ; "balanced tokens gt 0")]
+    #[test_case(PresetName::Full ; "full tokens gt 0")]
+    #[test_case(PresetName::SecurityFocused ; "security tokens gt 0")]
+    fn preset_estimated_tokens_positive(name: PresetName) {
+        let p = get_preset(&name);
+        assert!(
+            p.estimated_tokens > 0,
+            "estimated_tokens should be > 0 for {:?}",
+            name
+        );
+    }
+
+    // --- All presets have non-empty categories ---
+
+    #[test_case(PresetName::Minimal ; "minimal categories non-empty")]
+    #[test_case(PresetName::Balanced ; "balanced categories non-empty")]
+    #[test_case(PresetName::Full ; "full categories non-empty")]
+    #[test_case(PresetName::SecurityFocused ; "security categories non-empty")]
+    fn preset_categories_not_empty(name: PresetName) {
+        let p = get_preset(&name);
+        assert!(
+            !p.enabled_categories.is_empty(),
+            "categories should not be empty for {:?}",
+            name
+        );
+    }
+
+    // --- All presets have non-empty descriptions ---
+
+    #[test_case(PresetName::Minimal ; "minimal desc non-empty")]
+    #[test_case(PresetName::Balanced ; "balanced desc non-empty")]
+    #[test_case(PresetName::Full ; "full desc non-empty")]
+    #[test_case(PresetName::SecurityFocused ; "security desc non-empty")]
+    fn preset_description_not_empty(name: PresetName) {
+        let p = get_preset(&name);
+        assert!(
+            !p.description.is_empty(),
+            "description should not be empty for {:?}",
+            name
+        );
+    }
+
+    // --- Repository is always included ---
+
+    #[test_case(PresetName::Minimal ; "minimal has repo")]
+    #[test_case(PresetName::Balanced ; "balanced has repo")]
+    #[test_case(PresetName::Full ; "full has repo")]
+    #[test_case(PresetName::SecurityFocused ; "security has repo")]
+    fn all_presets_include_repository(name: PresetName) {
+        let p = get_preset(&name);
+        assert!(p.enabled_categories.contains(&CATEGORY_REPOSITORY));
+    }
+
+    // --- Search is always included ---
+
+    #[test_case(PresetName::Minimal ; "minimal has search")]
+    #[test_case(PresetName::Balanced ; "balanced has search")]
+    #[test_case(PresetName::Full ; "full has search")]
+    #[test_case(PresetName::SecurityFocused ; "security has search")]
+    fn all_presets_include_search(name: PresetName) {
+        let p = get_preset(&name);
+        assert!(p.enabled_categories.contains(&CATEGORY_SEARCH));
+    }
+
+    // --- Security-focused preset specifics ---
+
+    #[test]
+    fn security_preset_includes_security_category() {
+        let p = security_preset();
+        assert!(p.enabled_categories.contains(&CATEGORY_SECURITY));
+    }
+
+    #[test]
+    fn security_preset_includes_analysis_category() {
+        let p = security_preset();
+        assert!(p.enabled_categories.contains(&CATEGORY_ANALYSIS));
+    }
+
+    #[test]
+    fn security_preset_excludes_git() {
+        let p = security_preset();
+        assert!(!p.enabled_categories.contains(&CATEGORY_GIT));
+    }
+
+    #[test]
+    fn security_preset_excludes_context() {
+        let p = security_preset();
+        assert!(!p.enabled_categories.contains(&CATEGORY_CONTEXT));
+    }
+
+    // --- Full preset has ALL_CATEGORIES exactly ---
+
+    #[test]
+    fn full_preset_categories_match_all() {
+        let p = full_preset();
+        let cats: std::collections::HashSet<&str> = p.enabled_categories.into_iter().collect();
+        let all: std::collections::HashSet<&str> = ALL_CATEGORIES.iter().copied().collect();
+        pa_eq!(cats, all);
+    }
+
+    // --- Minimal preset exclusions ---
+
+    #[test]
+    fn minimal_preset_excludes_security() {
+        let p = minimal_preset();
+        assert!(!p.enabled_categories.contains(&CATEGORY_SECURITY));
+    }
+
+    #[test]
+    fn minimal_preset_excludes_git() {
+        let p = minimal_preset();
+        assert!(!p.enabled_categories.contains(&CATEGORY_GIT));
+    }
+
+    #[test]
+    fn minimal_preset_excludes_analysis() {
+        let p = minimal_preset();
+        assert!(!p.enabled_categories.contains(&CATEGORY_ANALYSIS));
+    }
+
+    #[test]
+    fn minimal_preset_excludes_context() {
+        let p = minimal_preset();
+        assert!(!p.enabled_categories.contains(&CATEGORY_CONTEXT));
+    }
+
+    #[test]
+    fn minimal_preset_excludes_callgraph() {
+        let p = minimal_preset();
+        assert!(!p.enabled_categories.contains(&CATEGORY_CALL_GRAPH));
+    }
+
+    // --- Balanced preset details ---
+
+    #[test]
+    fn balanced_preset_includes_callgraph() {
+        let p = balanced_preset();
+        assert!(p.enabled_categories.contains(&CATEGORY_CALL_GRAPH));
+    }
+
+    #[test]
+    fn balanced_preset_includes_context() {
+        let p = balanced_preset();
+        assert!(p.enabled_categories.contains(&CATEGORY_CONTEXT));
+    }
+
+    #[test]
+    fn balanced_preset_excludes_security() {
+        let p = balanced_preset();
+        assert!(!p.enabled_categories.contains(&CATEGORY_SECURITY));
+    }
+
+    #[test]
+    fn balanced_preset_excludes_git() {
+        let p = balanced_preset();
+        assert!(!p.enabled_categories.contains(&CATEGORY_GIT));
+    }
+
+    // --- enabled_categories returns correct set sizes ---
+
+    #[test_case(PresetName::Minimal, 2 ; "minimal set size")]
+    #[test_case(PresetName::Balanced, 4 ; "balanced set size")]
+    #[test_case(PresetName::Full, 7 ; "full set size")]
+    #[test_case(PresetName::SecurityFocused, 4 ; "security set size")]
+    fn enabled_categories_set_size(name: PresetName, expected: usize) {
+        let cats = enabled_categories(&name);
+        pa_eq!(cats.len(), expected);
+    }
+
+    // --- ALL_CATEGORIES ---
+
+    #[test]
+    fn all_categories_has_7_entries() {
+        pa_eq!(ALL_CATEGORIES.len(), 7);
+    }
+
+    #[test]
+    fn all_categories_contains_expected() {
+        for expected in [
+            "Repository",
+            "Search",
+            "CallGraph",
+            "Analysis",
+            "Security",
+            "Git",
+            "Context",
+        ] {
+            assert!(
+                ALL_CATEGORIES.contains(&expected),
+                "missing category: {}",
+                expected
+            );
+        }
+    }
+
+    // --- Token budget reasonableness ---
+
+    #[test]
+    fn minimal_token_budget_reasonable() {
+        let p = minimal_preset();
+        assert!(p.estimated_tokens >= 1_000);
+        assert!(p.estimated_tokens <= 5_000);
+    }
+
+    #[test]
+    fn full_token_budget_reasonable() {
+        let p = full_preset();
+        assert!(p.estimated_tokens >= 5_000);
+        assert!(p.estimated_tokens <= 20_000);
     }
 }

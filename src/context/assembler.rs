@@ -829,4 +829,349 @@ mod tests {
         // should not be wildly over budget.
         assert!(tokens < 300, "Expected output tokens < 300, got {}", tokens);
     }
+
+    // =====================================================================
+    // NEW TESTS: Phase 18C — Context assembler comprehensive coverage
+    // =====================================================================
+
+    // -- format_node_full edge cases -------------------------------------
+
+    #[test]
+    fn format_node_full_with_python_language() {
+        let mut node = make_node(
+            "fn:a.py:compute:1",
+            "compute",
+            "a.py",
+            NodeKind::Function,
+            1,
+            Some("def compute(x):\n    return x * 2"),
+            None,
+        );
+        node.language = Language::Python;
+        let formatted = format_node_full(&node);
+        assert!(formatted.contains("```py"));
+    }
+
+    #[test]
+    fn format_node_full_with_rust_language() {
+        let mut node = make_node(
+            "fn:a.rs:process:1",
+            "process",
+            "a.rs",
+            NodeKind::Function,
+            1,
+            Some("fn process(x: i32) -> i32 {\n    x + 1\n}"),
+            None,
+        );
+        node.language = Language::Rust;
+        let formatted = format_node_full(&node);
+        assert!(formatted.contains("```rust"));
+    }
+
+    #[test]
+    fn format_node_full_includes_location() {
+        let node = make_node(
+            "fn:src/util.ts:helper:42",
+            "helper",
+            "src/util.ts",
+            NodeKind::Function,
+            42,
+            Some("function helper() {}"),
+            None,
+        );
+        let formatted = format_node_full(&node);
+        assert!(formatted.contains("src/util.ts:42-47"));
+    }
+
+    #[test]
+    fn format_node_full_class_kind() {
+        let node = make_node(
+            "cls:a.ts:Foo:1",
+            "Foo",
+            "a.ts",
+            NodeKind::Class,
+            1,
+            Some("class Foo {\n  bar() {}\n}"),
+            None,
+        );
+        let formatted = format_node_full(&node);
+        assert!(formatted.contains("`class`"));
+    }
+
+    // -- format_node_signature edge cases ---------------------------------
+
+    #[test]
+    fn format_node_signature_method_kind() {
+        let node = make_node(
+            "m:a.ts:doWork:10",
+            "doWork",
+            "a.ts",
+            NodeKind::Method,
+            10,
+            Some("doWork(data: Data) {\n  process(data);\n}"),
+            None,
+        );
+        let sig = format_node_signature(&node);
+        assert!(sig.contains("`method`"));
+        assert!(sig.contains("**doWork**"));
+    }
+
+    // -- language_tag additional mappings ---------------------------------
+
+    #[test]
+    fn language_tag_go() {
+        assert_eq!(language_tag("go"), "go");
+    }
+
+    #[test]
+    fn language_tag_java() {
+        assert_eq!(language_tag("java"), "java");
+    }
+
+    // -- assemble_context with custom budget ------------------------------
+
+    #[test]
+    fn assemble_context_large_budget() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "fn:a.ts:greet:1",
+                "greet",
+                "a.ts",
+                NodeKind::Function,
+                1,
+                Some("function greet() { return 'hello'; }"),
+                Some("A greeting function"),
+            ))
+            .unwrap();
+
+        let search = HybridSearch::new(&store.conn);
+        let assembler = ContextAssembler::new(&store.conn, &search);
+
+        let ctx = assembler.assemble_context("greet", Some(100_000));
+        assert!(ctx.contains("greet"));
+        assert!(ctx.contains("## Core Context"));
+    }
+
+    #[test]
+    fn assemble_context_zero_budget() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "fn:a.ts:greet:1",
+                "greet",
+                "a.ts",
+                NodeKind::Function,
+                1,
+                Some("function greet() {}"),
+                None,
+            ))
+            .unwrap();
+
+        let search = HybridSearch::new(&store.conn);
+        let assembler = ContextAssembler::new(&store.conn, &search);
+
+        // Budget of 0 should still produce something (first item always included)
+        let ctx = assembler.assemble_context("greet", Some(0));
+        // Either empty or fallback message
+        assert!(!ctx.is_empty());
+    }
+
+    // -- assemble_context with multiple files ----------------------------
+
+    #[test]
+    fn assemble_context_multiple_files_in_structure() {
+        let store = setup();
+        for i in 0..5 {
+            store
+                .upsert_node(&make_node(
+                    &format!("fn:file{}.ts:func{}:{}", i, i, 1),
+                    &format!("func{}", i),
+                    &format!("src/file{}.ts", i),
+                    NodeKind::Function,
+                    1,
+                    Some(&format!("function func{}() {{}}", i)),
+                    None,
+                ))
+                .unwrap();
+        }
+
+        let search = HybridSearch::new(&store.conn);
+        let assembler = ContextAssembler::new(&store.conn, &search);
+
+        let ctx = assembler.assemble_context("func", None);
+        // Project structure should list multiple files
+        if ctx.contains("## Project Structure") {
+            assert!(ctx.contains("file0.ts") || ctx.contains("file1.ts"));
+        }
+    }
+
+    // -- assemble_context with edges creates near section -----------------
+
+    #[test]
+    fn assemble_context_with_callers_and_callees() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node(
+                    "fn:a.ts:main:1",
+                    "main",
+                    "a.ts",
+                    NodeKind::Function,
+                    1,
+                    Some("function main() { greet(); }"),
+                    None,
+                ),
+                make_node(
+                    "fn:a.ts:greet:10",
+                    "greet",
+                    "a.ts",
+                    NodeKind::Function,
+                    10,
+                    Some("function greet() { helper(); }"),
+                    None,
+                ),
+                make_node(
+                    "fn:a.ts:helper:20",
+                    "helper",
+                    "a.ts",
+                    NodeKind::Function,
+                    20,
+                    Some("function helper() {}"),
+                    None,
+                ),
+            ])
+            .unwrap();
+        store
+            .upsert_edges(&[
+                make_edge("fn:a.ts:main:1", "fn:a.ts:greet:10", EdgeKind::Calls),
+                make_edge("fn:a.ts:greet:10", "fn:a.ts:helper:20", EdgeKind::Calls),
+            ])
+            .unwrap();
+
+        let search = HybridSearch::new(&store.conn);
+        let assembler = ContextAssembler::new(&store.conn, &search);
+
+        let ctx = assembler.assemble_context("greet", None);
+        // Should include main as caller and helper as callee in related symbols
+        assert!(ctx.contains("greet"));
+    }
+
+    // -- get_neighbor_ids -------------------------------------------------
+
+    #[test]
+    fn get_neighbor_ids_bidirectional() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node(
+                    "fn:a.ts:a:1",
+                    "a",
+                    "a.ts",
+                    NodeKind::Function,
+                    1,
+                    None,
+                    None,
+                ),
+                make_node(
+                    "fn:a.ts:b:10",
+                    "b",
+                    "a.ts",
+                    NodeKind::Function,
+                    10,
+                    None,
+                    None,
+                ),
+                make_node(
+                    "fn:a.ts:c:20",
+                    "c",
+                    "a.ts",
+                    NodeKind::Function,
+                    20,
+                    None,
+                    None,
+                ),
+            ])
+            .unwrap();
+        store
+            .upsert_edges(&[
+                make_edge("fn:a.ts:a:1", "fn:a.ts:b:10", EdgeKind::Calls),
+                make_edge("fn:a.ts:c:20", "fn:a.ts:b:10", EdgeKind::Calls),
+            ])
+            .unwrap();
+
+        let search = HybridSearch::new(&store.conn);
+        let assembler = ContextAssembler::new(&store.conn, &search);
+
+        let neighbors = assembler.get_neighbor_ids("fn:a.ts:b:10");
+        // b's neighbors: a (incoming) and c (incoming), but also targets of b's outgoing
+        assert!(!neighbors.is_empty());
+    }
+
+    // -- load_node --------------------------------------------------------
+
+    #[test]
+    fn load_node_existing() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "fn:a.ts:test:1",
+                "test",
+                "a.ts",
+                NodeKind::Function,
+                1,
+                None,
+                None,
+            ))
+            .unwrap();
+
+        let search = HybridSearch::new(&store.conn);
+        let assembler = ContextAssembler::new(&store.conn, &search);
+
+        let node = assembler.load_node("fn:a.ts:test:1");
+        assert!(node.is_some());
+        assert_eq!(node.unwrap().name, "test");
+    }
+
+    #[test]
+    fn load_node_nonexistent() {
+        let store = setup();
+        let search = HybridSearch::new(&store.conn);
+        let assembler = ContextAssembler::new(&store.conn, &search);
+
+        let node = assembler.load_node("nonexistent");
+        assert!(node.is_none());
+    }
+
+    // -- get_distinct_files -----------------------------------------------
+
+    #[test]
+    fn get_distinct_files_sorted() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "a", "z.ts", NodeKind::Function, 1, None, None),
+                make_node("n2", "b", "a.ts", NodeKind::Function, 1, None, None),
+                make_node("n3", "c", "m.ts", NodeKind::Function, 1, None, None),
+            ])
+            .unwrap();
+
+        let search = HybridSearch::new(&store.conn);
+        let assembler = ContextAssembler::new(&store.conn, &search);
+
+        let files = assembler.get_distinct_files();
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0], "a.ts");
+        assert_eq!(files[1], "m.ts");
+        assert_eq!(files[2], "z.ts");
+    }
+
+    #[test]
+    fn get_distinct_files_empty() {
+        let store = setup();
+        let search = HybridSearch::new(&store.conn);
+        let assembler = ContextAssembler::new(&store.conn, &search);
+        let files = assembler.get_distinct_files();
+        assert!(files.is_empty());
+    }
 }

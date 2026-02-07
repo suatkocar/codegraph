@@ -582,6 +582,7 @@ impl GraphStore {
 mod tests {
     use super::*;
     use crate::types::{EdgeKind, Language, NodeKind};
+    use std::collections::HashMap;
 
     /// Spin up an in-memory store with the full schema applied.
     fn setup() -> GraphStore {
@@ -1011,5 +1012,628 @@ mod tests {
             .insert_unresolved_ref("file:a.ts", "./y", "import", "a.ts", 2)
             .unwrap();
         assert_eq!(store.get_unresolved_ref_count().unwrap(), 2);
+    }
+
+    // =====================================================================
+    // NEW TESTS: Phase 18C — GraphStore comprehensive coverage
+    // =====================================================================
+
+    // -- upsert_node idempotency ------------------------------------------
+
+    #[test]
+    fn upsert_node_idempotent_same_data() {
+        let store = setup();
+        let node = make_node("n1", "alpha", "a.ts", NodeKind::Function, 1);
+        store.upsert_node(&node).unwrap();
+        store.upsert_node(&node).unwrap();
+        store.upsert_node(&node).unwrap();
+        assert_eq!(store.get_node_count().unwrap(), 1);
+        let got = store.get_node("n1").unwrap().unwrap();
+        assert_eq!(got.name, "alpha");
+    }
+
+    #[test]
+    fn upsert_node_preserves_all_fields_on_update() {
+        let store = setup();
+        let mut node = make_node("n1", "alpha", "a.ts", NodeKind::Function, 1);
+        node.qualified_name = Some("Module.alpha".to_string());
+        node.documentation = Some("Original docs".to_string());
+        store.upsert_node(&node).unwrap();
+
+        node.name = "alpha_v2".to_string();
+        node.documentation = Some("Updated docs".to_string());
+        store.upsert_node(&node).unwrap();
+
+        let got = store.get_node("n1").unwrap().unwrap();
+        assert_eq!(got.name, "alpha_v2");
+        assert_eq!(got.documentation.as_deref(), Some("Updated docs"));
+        assert_eq!(store.get_node_count().unwrap(), 1);
+    }
+
+    // -- upsert_nodes batch -----------------------------------------------
+
+    #[test]
+    fn upsert_nodes_batch_empty() {
+        let store = setup();
+        store.upsert_nodes(&[]).unwrap();
+        assert_eq!(store.get_node_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn upsert_nodes_batch_large() {
+        let store = setup();
+        let nodes: Vec<CodeNode> = (0..100)
+            .map(|i| {
+                make_node(
+                    &format!("n{}", i),
+                    &format!("fn{}", i),
+                    "big.ts",
+                    NodeKind::Function,
+                    i,
+                )
+            })
+            .collect();
+        store.upsert_nodes(&nodes).unwrap();
+        assert_eq!(store.get_node_count().unwrap(), 100);
+    }
+
+    #[test]
+    fn upsert_nodes_batch_with_duplicates() {
+        let store = setup();
+        let n1 = make_node("n1", "alpha", "a.ts", NodeKind::Function, 1);
+        let n1_v2 = make_node("n1", "alpha_v2", "a.ts", NodeKind::Function, 1);
+        store.upsert_nodes(&[n1, n1_v2]).unwrap();
+        assert_eq!(store.get_node_count().unwrap(), 1);
+        let got = store.get_node("n1").unwrap().unwrap();
+        assert_eq!(got.name, "alpha_v2");
+    }
+
+    // -- upsert_edges batch -----------------------------------------------
+
+    #[test]
+    fn upsert_edges_batch_empty() {
+        let store = setup();
+        store.upsert_edges(&[]).unwrap();
+        assert_eq!(store.get_edge_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn upsert_edges_batch_large() {
+        let store = setup();
+        let mut nodes: Vec<CodeNode> = Vec::new();
+        let mut edges: Vec<CodeEdge> = Vec::new();
+        for i in 0..50 {
+            nodes.push(make_node(
+                &format!("n{}", i),
+                &format!("fn{}", i),
+                "big.ts",
+                NodeKind::Function,
+                i,
+            ));
+        }
+        store.upsert_nodes(&nodes).unwrap();
+        for i in 0..49 {
+            edges.push(make_edge(
+                &format!("n{}", i),
+                &format!("n{}", i + 1),
+                EdgeKind::Calls,
+                "big.ts",
+                i,
+            ));
+        }
+        store.upsert_edges(&edges).unwrap();
+        assert_eq!(store.get_edge_count().unwrap(), 49);
+    }
+
+    #[test]
+    fn upsert_edges_batch_with_duplicates() {
+        let store = setup();
+        let n1 = make_node("n1", "a", "x.ts", NodeKind::Function, 1);
+        let n2 = make_node("n2", "b", "x.ts", NodeKind::Function, 10);
+        store.upsert_nodes(&[n1, n2]).unwrap();
+
+        let e1 = make_edge("n1", "n2", EdgeKind::Calls, "x.ts", 3);
+        let e2 = make_edge("n1", "n2", EdgeKind::Calls, "x.ts", 5);
+        store.upsert_edges(&[e1, e2]).unwrap();
+        assert_eq!(store.get_edge_count().unwrap(), 1);
+    }
+
+    // -- delete_file_nodes selective removal -------------------------------
+
+    #[test]
+    fn delete_file_nodes_only_removes_target_file() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "a", "a.ts", NodeKind::Function, 1),
+                make_node("n2", "b", "b.ts", NodeKind::Function, 1),
+                make_node("n3", "c", "a.ts", NodeKind::Class, 10),
+            ])
+            .unwrap();
+        store
+            .upsert_edges(&[make_edge("n1", "n3", EdgeKind::Calls, "a.ts", 3)])
+            .unwrap();
+
+        store.delete_file_nodes("a.ts").unwrap();
+
+        assert_eq!(store.get_node_count().unwrap(), 1);
+        assert!(store.get_node("n2").unwrap().is_some());
+        assert!(store.get_node("n1").unwrap().is_none());
+        assert!(store.get_node("n3").unwrap().is_none());
+        assert_eq!(store.get_edge_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn delete_file_nodes_on_nonexistent_file_is_noop() {
+        let store = setup();
+        store
+            .upsert_node(&make_node("n1", "a", "a.ts", NodeKind::Function, 1))
+            .unwrap();
+        store.delete_file_nodes("nonexistent.ts").unwrap();
+        assert_eq!(store.get_node_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn delete_file_nodes_removes_cross_file_edges() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "a", "a.ts", NodeKind::Function, 1),
+                make_node("n2", "b", "b.ts", NodeKind::Function, 1),
+            ])
+            .unwrap();
+        store
+            .upsert_edge(&make_edge("n1", "n2", EdgeKind::Calls, "a.ts", 3))
+            .unwrap();
+        store
+            .upsert_edge(&make_edge("n2", "n1", EdgeKind::Imports, "b.ts", 1))
+            .unwrap();
+
+        store.delete_file_nodes("a.ts").unwrap();
+
+        assert_eq!(store.get_node_count().unwrap(), 1);
+        // Both edges should be gone since n1 (source or target) belongs to a.ts
+        assert_eq!(store.get_edge_count().unwrap(), 0);
+    }
+
+    // -- get_nodes_by_type for each NodeKind ------------------------------
+
+    #[test]
+    fn get_nodes_by_type_class() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "Foo", "a.ts", NodeKind::Class, 1),
+                make_node("n2", "bar", "a.ts", NodeKind::Function, 10),
+            ])
+            .unwrap();
+        let classes = store.get_nodes_by_type("class").unwrap();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name, "Foo");
+    }
+
+    #[test]
+    fn get_nodes_by_type_method() {
+        let store = setup();
+        store
+            .upsert_node(&make_node("n1", "doWork", "a.ts", NodeKind::Method, 1))
+            .unwrap();
+        let methods = store.get_nodes_by_type("method").unwrap();
+        assert_eq!(methods.len(), 1);
+    }
+
+    #[test]
+    fn get_nodes_by_type_variable() {
+        let store = setup();
+        store
+            .upsert_node(&make_node("n1", "count", "a.ts", NodeKind::Variable, 1))
+            .unwrap();
+        let vars = store.get_nodes_by_type("variable").unwrap();
+        assert_eq!(vars.len(), 1);
+    }
+
+    #[test]
+    fn get_nodes_by_type_interface() {
+        let store = setup();
+        store
+            .upsert_node(&make_node("n1", "IFoo", "a.ts", NodeKind::Interface, 1))
+            .unwrap();
+        let ifaces = store.get_nodes_by_type("interface").unwrap();
+        assert_eq!(ifaces.len(), 1);
+    }
+
+    #[test]
+    fn get_nodes_by_type_enum() {
+        let store = setup();
+        store
+            .upsert_node(&make_node("n1", "Color", "a.ts", NodeKind::Enum, 1))
+            .unwrap();
+        let enums = store.get_nodes_by_type("enum").unwrap();
+        assert_eq!(enums.len(), 1);
+    }
+
+    #[test]
+    fn get_nodes_by_type_returns_empty_for_unknown_type() {
+        let store = setup();
+        store
+            .upsert_node(&make_node("n1", "a", "a.ts", NodeKind::Function, 1))
+            .unwrap();
+        let results = store.get_nodes_by_type("widget").unwrap();
+        assert!(results.is_empty());
+    }
+
+    // -- get_in_edges / get_out_edges edge type filters --------------------
+
+    #[test]
+    fn get_in_edges_filtered_by_type() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "a", "x.ts", NodeKind::Function, 1),
+                make_node("n2", "b", "x.ts", NodeKind::Function, 10),
+                make_node("n3", "c", "x.ts", NodeKind::Function, 20),
+            ])
+            .unwrap();
+        store
+            .upsert_edges(&[
+                make_edge("n1", "n3", EdgeKind::Calls, "x.ts", 3),
+                make_edge("n2", "n3", EdgeKind::Imports, "x.ts", 1),
+            ])
+            .unwrap();
+
+        let calls = store.get_in_edges("n3", Some("calls")).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].source, "n1");
+
+        let imports = store.get_in_edges("n3", Some("imports")).unwrap();
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].source, "n2");
+    }
+
+    #[test]
+    fn get_out_edges_returns_empty_for_no_outgoing() {
+        let store = setup();
+        store
+            .upsert_node(&make_node("n1", "a", "x.ts", NodeKind::Function, 1))
+            .unwrap();
+        let out = store.get_out_edges("n1", None).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn get_in_edges_returns_empty_for_no_incoming() {
+        let store = setup();
+        store
+            .upsert_node(&make_node("n1", "a", "x.ts", NodeKind::Function, 1))
+            .unwrap();
+        let incoming = store.get_in_edges("n1", None).unwrap();
+        assert!(incoming.is_empty());
+    }
+
+    // -- get_stats edge cases ---------------------------------------------
+
+    #[test]
+    fn get_stats_single_file() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "a", "x.ts", NodeKind::Function, 1),
+                make_node("n2", "b", "x.ts", NodeKind::Function, 10),
+            ])
+            .unwrap();
+        let stats = store.get_stats().unwrap();
+        assert_eq!(stats.nodes, 2);
+        assert_eq!(stats.files, 1);
+    }
+
+    #[test]
+    fn get_stats_multiple_files() {
+        let store = setup();
+        for i in 0..5 {
+            store
+                .upsert_node(&make_node(
+                    &format!("n{}", i),
+                    &format!("fn{}", i),
+                    &format!("file{}.ts", i),
+                    NodeKind::Function,
+                    1,
+                ))
+                .unwrap();
+        }
+        let stats = store.get_stats().unwrap();
+        assert_eq!(stats.nodes, 5);
+        assert_eq!(stats.files, 5);
+    }
+
+    // -- unresolved refs additional cases ---------------------------------
+
+    #[test]
+    fn unresolved_refs_multiple_files() {
+        let store = setup();
+        store
+            .insert_unresolved_ref("src1", "./a", "import", "a.ts", 1)
+            .unwrap();
+        store
+            .insert_unresolved_ref("src2", "./b", "import", "b.ts", 2)
+            .unwrap();
+        store
+            .insert_unresolved_ref("src3", "./c", "import", "a.ts", 3)
+            .unwrap();
+
+        let all = store.get_unresolved_refs(None).unwrap();
+        assert_eq!(all.len(), 3);
+
+        let a_refs = store.get_unresolved_refs(Some("a.ts")).unwrap();
+        assert_eq!(a_refs.len(), 2);
+
+        let b_refs = store.get_unresolved_refs(Some("b.ts")).unwrap();
+        assert_eq!(b_refs.len(), 1);
+    }
+
+    #[test]
+    fn clear_unresolved_refs_idempotent() {
+        let store = setup();
+        store
+            .insert_unresolved_ref("src1", "./a", "import", "a.ts", 1)
+            .unwrap();
+        store.clear_unresolved_refs_for_file("a.ts").unwrap();
+        store.clear_unresolved_refs_for_file("a.ts").unwrap(); // second call is noop
+        assert_eq!(store.get_unresolved_ref_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn unresolved_refs_preserve_fields() {
+        let store = setup();
+        store
+            .insert_unresolved_ref("src:main.ts", "./utils", "import", "main.ts", 42)
+            .unwrap();
+        let refs = store.get_unresolved_refs(Some("main.ts")).unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].source_id, "src:main.ts");
+        assert_eq!(refs[0].specifier, "./utils");
+        assert_eq!(refs[0].ref_type, "import");
+        assert_eq!(refs[0].file_path, "main.ts");
+        assert_eq!(refs[0].line, 42);
+    }
+
+    // -- replace_file_data edge cases -------------------------------------
+
+    #[test]
+    fn replace_file_data_with_empty_replaces_to_nothing() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "a", "a.ts", NodeKind::Function, 1),
+                make_node("n2", "b", "a.ts", NodeKind::Function, 10),
+            ])
+            .unwrap();
+        store.replace_file_data("a.ts", &[], &[]).unwrap();
+        assert_eq!(store.get_node_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn replace_file_data_with_new_edges() {
+        let store = setup();
+        let n1 = make_node("n1", "a", "a.ts", NodeKind::Function, 1);
+        let n2 = make_node("n2", "b", "a.ts", NodeKind::Function, 10);
+        store.upsert_nodes(&[n1.clone(), n2.clone()]).unwrap();
+
+        let new_n3 = make_node("n3", "c", "a.ts", NodeKind::Function, 20);
+        let new_n4 = make_node("n4", "d", "a.ts", NodeKind::Function, 30);
+        let new_edge = make_edge("n3", "n4", EdgeKind::Calls, "a.ts", 25);
+        store
+            .replace_file_data("a.ts", &[new_n3, new_n4], &[new_edge])
+            .unwrap();
+
+        assert_eq!(store.get_node_count().unwrap(), 2);
+        assert_eq!(store.get_edge_count().unwrap(), 1);
+        assert!(store.get_node("n1").unwrap().is_none());
+        assert!(store.get_node("n3").unwrap().is_some());
+    }
+
+    // -- edge with metadata -----------------------------------------------
+
+    #[test]
+    fn edge_with_metadata_is_stored() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "a", "x.ts", NodeKind::Function, 1),
+                make_node("n2", "b", "x.ts", NodeKind::Function, 10),
+            ])
+            .unwrap();
+
+        let mut metadata = HashMap::new();
+        metadata.insert("context".to_string(), "test-context".to_string());
+        let edge = CodeEdge {
+            source: "n1".to_string(),
+            target: "n2".to_string(),
+            kind: EdgeKind::Calls,
+            file_path: "x.ts".to_string(),
+            line: 3,
+            metadata: Some(metadata),
+        };
+        store.upsert_edge(&edge).unwrap();
+
+        let edges = store.get_out_edges("n1", None).unwrap();
+        assert_eq!(edges.len(), 1);
+    }
+
+    // -- multiple edge types between same nodes ---------------------------
+
+    #[test]
+    fn multiple_edge_types_between_same_nodes() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "a", "x.ts", NodeKind::Function, 1),
+                make_node("n2", "b", "x.ts", NodeKind::Function, 10),
+            ])
+            .unwrap();
+        store
+            .upsert_edge(&make_edge("n1", "n2", EdgeKind::Calls, "x.ts", 3))
+            .unwrap();
+        store
+            .upsert_edge(&make_edge("n1", "n2", EdgeKind::Imports, "x.ts", 1))
+            .unwrap();
+        store
+            .upsert_edge(&make_edge("n1", "n2", EdgeKind::References, "x.ts", 5))
+            .unwrap();
+
+        let all = store.get_out_edges("n1", None).unwrap();
+        assert_eq!(all.len(), 3);
+    }
+
+    // -- get_nodes_by_file empty ------------------------------------------
+
+    #[test]
+    fn get_nodes_by_file_returns_empty_for_missing_file() {
+        let store = setup();
+        store
+            .upsert_node(&make_node("n1", "a", "a.ts", NodeKind::Function, 1))
+            .unwrap();
+        let nodes = store.get_nodes_by_file("nonexistent.ts").unwrap();
+        assert!(nodes.is_empty());
+    }
+
+    // -- get_nodes_by_name empty ------------------------------------------
+
+    #[test]
+    fn get_nodes_by_name_returns_empty_for_missing_name() {
+        let store = setup();
+        store
+            .upsert_node(&make_node("n1", "alpha", "a.ts", NodeKind::Function, 1))
+            .unwrap();
+        let nodes = store.get_nodes_by_name("nonexistent").unwrap();
+        assert!(nodes.is_empty());
+    }
+
+    // -- compute_simple_hash consistency ----------------------------------
+
+    #[test]
+    fn compute_simple_hash_deterministic() {
+        let h1 = compute_simple_hash("test-input");
+        let h2 = compute_simple_hash("test-input");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn compute_simple_hash_different_inputs() {
+        let h1 = compute_simple_hash("alpha");
+        let h2 = compute_simple_hash("beta");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn compute_simple_hash_empty_input() {
+        let h = compute_simple_hash("");
+        assert_eq!(h, "0");
+    }
+
+    // -- node with qualified name -----------------------------------------
+
+    #[test]
+    fn upsert_node_with_qualified_name() {
+        let store = setup();
+        let mut node = make_node("n1", "doWork", "a.ts", NodeKind::Method, 10);
+        node.qualified_name = Some("MyClass.doWork".to_string());
+        store.upsert_node(&node).unwrap();
+
+        let got = store.get_node("n1").unwrap().unwrap();
+        assert_eq!(got.qualified_name.as_deref(), Some("MyClass.doWork"));
+    }
+
+    // -- node body truncation in metadata ---------------------------------
+
+    #[test]
+    fn node_body_longer_than_4kb_is_truncated_in_metadata() {
+        let store = setup();
+        let long_body = "x".repeat(8192);
+        let mut node = make_node("n1", "bigFunc", "a.ts", NodeKind::Function, 1);
+        node.body = Some(long_body);
+        store.upsert_node(&node).unwrap();
+
+        // The node is stored; metadata body is truncated but node itself is fine
+        let got = store.get_node("n1").unwrap().unwrap();
+        assert_eq!(got.name, "bigFunc");
+    }
+
+    // -- node without optional fields -------------------------------------
+
+    #[test]
+    fn upsert_node_without_optional_fields() {
+        let store = setup();
+        let node = CodeNode {
+            id: "n1".to_string(),
+            name: "bare".to_string(),
+            qualified_name: None,
+            kind: NodeKind::Function,
+            file_path: "a.ts".to_string(),
+            start_line: 1,
+            end_line: 5,
+            start_column: 0,
+            end_column: 0,
+            language: Language::TypeScript,
+            body: None,
+            documentation: None,
+            exported: None,
+        };
+        store.upsert_node(&node).unwrap();
+        let got = store.get_node("n1").unwrap().unwrap();
+        assert_eq!(got.name, "bare");
+        assert!(got.body.is_none());
+        assert!(got.documentation.is_none());
+    }
+
+    // -- from_connection --------------------------------------------------
+
+    #[test]
+    fn from_connection_works_with_initialized_db() {
+        let conn = initialize_database(":memory:").unwrap();
+        let store = GraphStore::from_connection(conn);
+        assert_eq!(store.get_node_count().unwrap(), 0);
+    }
+
+    // -- concurrent operations in same store ------------------------------
+
+    #[test]
+    fn sequential_upsert_and_query_interleaved() {
+        let store = setup();
+        for i in 0..20 {
+            store
+                .upsert_node(&make_node(
+                    &format!("n{}", i),
+                    &format!("fn{}", i),
+                    "a.ts",
+                    NodeKind::Function,
+                    i,
+                ))
+                .unwrap();
+            assert_eq!(store.get_node_count().unwrap(), (i + 1) as usize);
+        }
+    }
+
+    // -- get_all_edges with various edge types ----------------------------
+
+    #[test]
+    fn get_all_edges_mixed_types() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "a", "a.ts", NodeKind::Function, 1),
+                make_node("n2", "b", "a.ts", NodeKind::Function, 10),
+                make_node("n3", "c", "a.ts", NodeKind::Class, 20),
+            ])
+            .unwrap();
+        store
+            .upsert_edges(&[
+                make_edge("n1", "n2", EdgeKind::Calls, "a.ts", 3),
+                make_edge("n1", "n3", EdgeKind::Imports, "a.ts", 1),
+                make_edge("n2", "n3", EdgeKind::Extends, "a.ts", 15),
+            ])
+            .unwrap();
+
+        let all = store.get_all_edges().unwrap();
+        assert_eq!(all.len(), 3);
     }
 }

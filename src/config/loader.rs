@@ -9,9 +9,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use super::preset::enabled_categories;
-use super::schema::{
-    CategoryConfig, CodeGraphConfig, PresetName, ToolMetadata, ToolOverride,
-};
+use super::schema::{CategoryConfig, CodeGraphConfig, PresetName, ToolMetadata, ToolOverride};
 use crate::error::CodeGraphError;
 
 // ---------------------------------------------------------------------------
@@ -460,7 +458,10 @@ performance:
     #[test]
     fn test_env_disabled_tools() {
         let mut config = CodeGraphConfig::default();
-        std::env::set_var("CODEGRAPH_DISABLED_TOOLS", "codegraph_dead_code,codegraph_diagram");
+        std::env::set_var(
+            "CODEGRAPH_DISABLED_TOOLS",
+            "codegraph_dead_code,codegraph_diagram",
+        );
         load_env_overrides(&mut config);
         assert!(!config.is_tool_enabled("codegraph_dead_code"));
         assert!(!config.is_tool_enabled("codegraph_diagram"));
@@ -509,10 +510,10 @@ performance:
     fn test_merge_category_overrides() {
         let base = CodeGraphConfig::default();
         let mut overlay = CodeGraphConfig::default();
-        overlay.tools.categories.insert(
-            "Git".to_string(),
-            CategoryConfig { enabled: false },
-        );
+        overlay
+            .tools
+            .categories
+            .insert("Git".to_string(), CategoryConfig { enabled: false });
 
         let merged = merge_configs(base, overlay);
         assert!(!merged.is_category_enabled("Git"));
@@ -630,10 +631,10 @@ performance:
     #[test]
     fn test_filter_with_category_override() {
         let mut config = CodeGraphConfig::default();
-        config.tools.categories.insert(
-            "Git".to_string(),
-            CategoryConfig { enabled: false },
-        );
+        config
+            .tools
+            .categories
+            .insert("Git".to_string(), CategoryConfig { enabled: false });
         let tools = sample_tools();
         let filtered = filter_tools(&config, &tools);
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
@@ -708,5 +709,310 @@ tools:
 
         let config = load_config(Some("balanced"), Some(dir.path())).unwrap();
         assert_eq!(config.preset, PresetName::Balanced); // CLI wins
+    }
+
+    // ====================================================================
+    // Phase 18B — extended config loader tests
+    // ====================================================================
+
+    use pretty_assertions::assert_eq as pa_eq;
+    use test_case::test_case;
+
+    // --- detect_editor: full coverage ---
+
+    #[test_case("claude-code", PresetName::Full ; "claude code hyphen")]
+    #[test_case("claude_code", PresetName::Full ; "claude code underscore")]
+    #[test_case("claude-desktop", PresetName::Full ; "claude-desktop full")]
+    #[test_case("claude", PresetName::Full ; "claude full")]
+    #[test_case("claude.ai", PresetName::Full ; "claude.ai full")]
+    #[test_case("vscode", PresetName::Balanced ; "vscode balanced")]
+    #[test_case("code", PresetName::Balanced ; "code balanced")]
+    #[test_case("visual studio code", PresetName::Balanced ; "vs code balanced")]
+    #[test_case("cursor", PresetName::Balanced ; "cursor balanced")]
+    #[test_case("windsurf", PresetName::Balanced ; "windsurf balanced")]
+    #[test_case("intellij", PresetName::Balanced ; "intellij balanced")]
+    #[test_case("idea", PresetName::Balanced ; "idea balanced")]
+    #[test_case("pycharm", PresetName::Balanced ; "pycharm balanced")]
+    #[test_case("webstorm", PresetName::Balanced ; "webstorm balanced")]
+    #[test_case("rustrover", PresetName::Balanced ; "rustrover balanced")]
+    #[test_case("clion", PresetName::Balanced ; "clion balanced")]
+    #[test_case("goland", PresetName::Balanced ; "goland balanced")]
+    #[test_case("phpstorm", PresetName::Balanced ; "phpstorm balanced")]
+    #[test_case("rider", PresetName::Balanced ; "rider balanced")]
+    #[test_case("emacs", PresetName::Balanced ; "emacs balanced")]
+    #[test_case("sublime", PresetName::Balanced ; "sublime balanced")]
+    #[test_case("sublime text", PresetName::Balanced ; "sublime text balanced")]
+    #[test_case("subl", PresetName::Balanced ; "subl balanced")]
+    #[test_case("zed", PresetName::Minimal ; "zed minimal")]
+    #[test_case("vim", PresetName::Minimal ; "vim minimal")]
+    #[test_case("nvim", PresetName::Minimal ; "nvim minimal")]
+    #[test_case("neovim", PresetName::Minimal ; "neovim minimal")]
+    #[test_case("unknown-editor", PresetName::Full ; "unknown defaults full")]
+    #[test_case("", PresetName::Full ; "empty defaults full")]
+    fn detect_editor_parameterised(client: &str, expected: PresetName) {
+        pa_eq!(detect_editor(client), expected);
+    }
+
+    #[test]
+    fn detect_editor_case_insensitive_all() {
+        pa_eq!(detect_editor("VSCODE"), PresetName::Balanced);
+        pa_eq!(detect_editor("Cursor"), PresetName::Balanced);
+        pa_eq!(detect_editor("INTELLIJ"), PresetName::Balanced);
+        pa_eq!(detect_editor("ZED"), PresetName::Minimal);
+        pa_eq!(detect_editor("VIM"), PresetName::Minimal);
+        pa_eq!(detect_editor("CLAUDE-CODE"), PresetName::Full);
+    }
+
+    #[test]
+    fn detect_editor_whitespace_all() {
+        pa_eq!(detect_editor("  vscode  "), PresetName::Balanced);
+        pa_eq!(detect_editor("  zed  "), PresetName::Minimal);
+        pa_eq!(detect_editor("  claude-code  "), PresetName::Full);
+        pa_eq!(detect_editor("\tcursor\t"), PresetName::Balanced);
+    }
+
+    // --- filter_tools extended ---
+
+    #[test]
+    fn filter_balanced_preset_includes_callgraph() {
+        let mut config = CodeGraphConfig::default();
+        config.preset = PresetName::Balanced;
+        let tools = sample_tools();
+        let filtered = filter_tools(&config, &tools);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"codegraph_callers")); // CallGraph in Balanced
+    }
+
+    #[test]
+    fn filter_balanced_preset_includes_context() {
+        let mut config = CodeGraphConfig::default();
+        config.preset = PresetName::Balanced;
+        let tools = sample_tools();
+        let filtered = filter_tools(&config, &tools);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"codegraph_context"));
+    }
+
+    #[test]
+    fn filter_security_preset_excludes_callgraph() {
+        let mut config = CodeGraphConfig::default();
+        config.preset = PresetName::SecurityFocused;
+        let tools = sample_tools();
+        let filtered = filter_tools(&config, &tools);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert!(!names.contains(&"codegraph_callers"));
+    }
+
+    #[test]
+    fn filter_with_category_override_overrides_preset() {
+        let mut config = CodeGraphConfig::default();
+        config.preset = PresetName::Minimal; // Only Repository + Search
+                                             // But explicitly enable Security category
+        config
+            .tools
+            .categories
+            .insert("Security".to_string(), CategoryConfig { enabled: true });
+        let tools = sample_tools();
+        let filtered = filter_tools(&config, &tools);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"codegraph_scan_security"));
+    }
+
+    #[test]
+    fn filter_max_tool_count_zero() {
+        let mut config = CodeGraphConfig::default();
+        config.performance.max_tool_count = Some(0);
+        let tools = sample_tools();
+        let filtered = filter_tools(&config, &tools);
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn filter_max_tool_count_exceeds_total() {
+        let mut config = CodeGraphConfig::default();
+        config.performance.max_tool_count = Some(100);
+        let tools = sample_tools();
+        let filtered = filter_tools(&config, &tools);
+        pa_eq!(filtered.len(), tools.len());
+    }
+
+    #[test]
+    fn filter_disabled_tool_even_if_category_enabled() {
+        let mut config = CodeGraphConfig::default();
+        config.tools.overrides.insert(
+            "codegraph_scan_security".to_string(),
+            ToolOverride::disabled("not needed"),
+        );
+        let tools = sample_tools();
+        let filtered = filter_tools(&config, &tools);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert!(!names.contains(&"codegraph_scan_security"));
+    }
+
+    // --- merge_configs extended ---
+
+    #[test]
+    fn merge_version_override() {
+        let base = CodeGraphConfig::default();
+        let mut overlay = CodeGraphConfig::default();
+        overlay.version = "2.0".to_string();
+        let merged = merge_configs(base, overlay);
+        pa_eq!(merged.version, "2.0");
+    }
+
+    #[test]
+    fn merge_version_1_0_is_not_overridden() {
+        let mut base = CodeGraphConfig::default();
+        base.version = "2.0".to_string();
+        let overlay = CodeGraphConfig::default(); // version = "1.0"
+        let merged = merge_configs(base, overlay);
+        // overlay version is "1.0" which is not overridden per the logic
+        pa_eq!(merged.version, "2.0");
+    }
+
+    #[test]
+    fn merge_multiple_tool_overrides() {
+        let base = CodeGraphConfig::default();
+        let mut overlay = CodeGraphConfig::default();
+        overlay
+            .tools
+            .overrides
+            .insert("tool_a".to_string(), ToolOverride::disabled("reason1"));
+        overlay
+            .tools
+            .overrides
+            .insert("tool_b".to_string(), ToolOverride::disabled("reason2"));
+        let merged = merge_configs(base, overlay);
+        assert!(!merged.is_tool_enabled("tool_a"));
+        assert!(!merged.is_tool_enabled("tool_b"));
+    }
+
+    #[test]
+    fn merge_exclude_tests_propagates() {
+        let base = CodeGraphConfig::default();
+        let mut overlay = CodeGraphConfig::default();
+        overlay.performance.exclude_tests = true;
+        let merged = merge_configs(base, overlay);
+        assert!(merged.performance.exclude_tests);
+    }
+
+    #[test]
+    fn merge_exclude_tests_base_true_overlay_false_stays_true() {
+        let mut base = CodeGraphConfig::default();
+        base.performance.exclude_tests = true;
+        let overlay = CodeGraphConfig::default(); // exclude_tests = false
+        let merged = merge_configs(base, overlay);
+        // The merge logic: `if overlay.performance.exclude_tests { base.performance.exclude_tests = true; }`
+        // Since overlay is false, base stays true? No - base is moved. Let's check:
+        // Actually base is mut, overlay.exclude_tests is false, so the if-branch doesn't fire.
+        // But base.exclude_tests was already true, so it stays true.
+        assert!(merged.performance.exclude_tests);
+    }
+
+    // --- load_project_config with various YAML formats ---
+
+    #[test]
+    fn load_project_config_with_tool_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join(".codegraph.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+preset: balanced
+tools:
+  overrides:
+    codegraph_dead_code:
+      enabled: false
+      reason: "slow"
+"#,
+        )
+        .unwrap();
+
+        let config = load_project_config(dir.path()).unwrap();
+        pa_eq!(config.preset, PresetName::Balanced);
+        assert!(!config.is_tool_enabled("codegraph_dead_code"));
+    }
+
+    #[test]
+    fn load_project_config_minimal_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join(".codegraph.yaml");
+        std::fs::write(&config_path, "preset: minimal\n").unwrap();
+
+        let config = load_project_config(dir.path()).unwrap();
+        pa_eq!(config.preset, PresetName::Minimal);
+    }
+
+    #[test]
+    fn load_project_config_empty_file_uses_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join(".codegraph.yaml");
+        std::fs::write(&config_path, "{}\n").unwrap();
+
+        let config = load_project_config(dir.path()).unwrap();
+        pa_eq!(config.preset, PresetName::Full); // default
+    }
+
+    // --- load_config end-to-end ---
+
+    #[test]
+    fn load_config_no_project_no_cli() {
+        let config = load_config(None, None).unwrap();
+        pa_eq!(config.version, "1.0");
+        // Preset may be affected by env vars, but version should always be 1.0
+    }
+
+    #[test]
+    fn load_config_with_nonexistent_project_dir() {
+        let config = load_config(None, Some(Path::new("/nonexistent/path"))).unwrap();
+        pa_eq!(config.version, "1.0");
+    }
+
+    #[test]
+    fn load_config_unknown_cli_preset_falls_back() {
+        let config = load_config(Some("nonexistent_preset"), None).unwrap();
+        // Invalid preset string is ignored, defaults apply
+        pa_eq!(config.version, "1.0");
+    }
+
+    // --- load_env_overrides: edge cases ---
+
+    #[test]
+    fn env_exclude_tests_yes() {
+        let mut config = CodeGraphConfig::default();
+        std::env::set_var("CODEGRAPH_EXCLUDE_TESTS", "yes");
+        load_env_overrides(&mut config);
+        assert!(config.performance.exclude_tests);
+        std::env::remove_var("CODEGRAPH_EXCLUDE_TESTS");
+    }
+
+    #[test]
+    fn env_disabled_tools_empty_string() {
+        let mut config = CodeGraphConfig::default();
+        std::env::set_var("CODEGRAPH_DISABLED_TOOLS", "");
+        load_env_overrides(&mut config);
+        // Empty string should not add any overrides
+        assert!(config.tools.overrides.is_empty());
+        std::env::remove_var("CODEGRAPH_DISABLED_TOOLS");
+    }
+
+    #[test]
+    fn env_disabled_tools_with_spaces() {
+        let mut config = CodeGraphConfig::default();
+        std::env::set_var("CODEGRAPH_DISABLED_TOOLS", " tool_a , tool_b , tool_c ");
+        load_env_overrides(&mut config);
+        assert!(!config.is_tool_enabled("tool_a"));
+        assert!(!config.is_tool_enabled("tool_b"));
+        assert!(!config.is_tool_enabled("tool_c"));
+        std::env::remove_var("CODEGRAPH_DISABLED_TOOLS");
+    }
+
+    #[test]
+    fn env_invalid_preset_ignored() {
+        let mut config = CodeGraphConfig::default();
+        std::env::set_var("CODEGRAPH_PRESET", "nonexistent");
+        load_env_overrides(&mut config);
+        pa_eq!(config.preset, PresetName::Full); // unchanged
+        std::env::remove_var("CODEGRAPH_PRESET");
     }
 }

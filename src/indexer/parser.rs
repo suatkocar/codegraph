@@ -151,15 +151,38 @@ mod tests {
     /// All 32 language variants for exhaustive testing.
     fn all_languages() -> Vec<Language> {
         vec![
-            Language::TypeScript, Language::Tsx, Language::JavaScript, Language::Jsx,
-            Language::Python, Language::Go, Language::Rust, Language::Java,
-            Language::C, Language::Cpp, Language::CSharp, Language::Php,
-            Language::Ruby, Language::Swift, Language::Kotlin,
+            Language::TypeScript,
+            Language::Tsx,
+            Language::JavaScript,
+            Language::Jsx,
+            Language::Python,
+            Language::Go,
+            Language::Rust,
+            Language::Java,
+            Language::C,
+            Language::Cpp,
+            Language::CSharp,
+            Language::Php,
+            Language::Ruby,
+            Language::Swift,
+            Language::Kotlin,
             // Phase 11
-            Language::Bash, Language::Scala, Language::Dart, Language::Zig,
-            Language::Lua, Language::Verilog, Language::Haskell, Language::Elixir,
-            Language::Groovy, Language::PowerShell, Language::Clojure, Language::Julia,
-            Language::R, Language::Erlang, Language::Elm, Language::Fortran,
+            Language::Bash,
+            Language::Scala,
+            Language::Dart,
+            Language::Zig,
+            Language::Lua,
+            Language::Verilog,
+            Language::Haskell,
+            Language::Elixir,
+            Language::Groovy,
+            Language::PowerShell,
+            Language::Clojure,
+            Language::Julia,
+            Language::R,
+            Language::Erlang,
+            Language::Elm,
+            Language::Fortran,
             Language::Nix,
         ]
     }
@@ -672,7 +695,9 @@ greet() {
 MY_VAR="world"
 greet "$MY_VAR"
 "#;
-        let tree = parser.parse(source, Language::Bash).expect("should parse Bash");
+        let tree = parser
+            .parse(source, Language::Bash)
+            .expect("should parse Bash");
         let root = tree.root_node();
         assert_eq!(root.kind(), "program");
         assert!(root.child_count() > 0);
@@ -705,7 +730,9 @@ object Main {
 
 case class User(id: Int, name: String)
 "#;
-        let tree = parser.parse(source, Language::Scala).expect("should parse Scala");
+        let tree = parser
+            .parse(source, Language::Scala)
+            .expect("should parse Scala");
         let root = tree.root_node();
         assert_eq!(root.kind(), "compilation_unit");
         assert!(root.child_count() > 0);
@@ -731,7 +758,9 @@ void main() {
   print(greeter.greet('World'));
 }
 "#;
-        let tree = parser.parse(source, Language::Dart).expect("should parse Dart");
+        let tree = parser
+            .parse(source, Language::Dart)
+            .expect("should parse Dart");
         let root = tree.root_node();
         assert_eq!(root.kind(), "program");
         assert!(root.child_count() > 0);
@@ -753,7 +782,9 @@ pub fn main() !void {
     std.debug.print("Result: {}\n", .{result});
 }
 "#;
-        let tree = parser.parse(source, Language::Zig).expect("should parse Zig");
+        let tree = parser
+            .parse(source, Language::Zig)
+            .expect("should parse Zig");
         let root = tree.root_node();
         assert_eq!(root.kind(), "source_file");
         assert!(root.child_count() > 0);
@@ -785,7 +816,9 @@ end
 local result = greet("World")
 print(result)
 "#;
-        let tree = parser.parse(source, Language::Lua).expect("should parse Lua");
+        let tree = parser
+            .parse(source, Language::Lua)
+            .expect("should parse Lua");
         let root = tree.root_node();
         assert_eq!(root.kind(), "chunk");
         assert!(root.child_count() > 0);
@@ -811,7 +844,9 @@ end
 
 endmodule
 "#;
-        let tree = parser.parse(source, Language::Verilog).expect("should parse Verilog");
+        let tree = parser
+            .parse(source, Language::Verilog)
+            .expect("should parse Verilog");
         let root = tree.root_node();
         assert_eq!(root.kind(), "source_file");
         assert!(root.child_count() > 0);
@@ -842,7 +877,9 @@ greet name = "Hello, " ++ name ++ "!"
 main :: IO ()
 main = putStrLn (greet "World")
 "#;
-        let tree = parser.parse(source, Language::Haskell).expect("should parse Haskell");
+        let tree = parser
+            .parse(source, Language::Haskell)
+            .expect("should parse Haskell");
         let root = tree.root_node();
         assert_eq!(root.kind(), "haskell");
         assert!(root.child_count() > 0);
@@ -869,7 +906,9 @@ defmodule Main do
   end
 end
 "#;
-        let tree = parser.parse(source, Language::Elixir).expect("should parse Elixir");
+        let tree = parser
+            .parse(source, Language::Elixir)
+            .expect("should parse Elixir");
         let root = tree.root_node();
         assert_eq!(root.kind(), "source");
         assert!(root.child_count() > 0);
@@ -886,7 +925,9 @@ class UserService {
     }
 }
 "#;
-        let tree = parser.parse(source, Language::Groovy).expect("should parse Groovy");
+        let tree = parser
+            .parse(source, Language::Groovy)
+            .expect("should parse Groovy");
         let root = tree.root_node();
         assert!(root.child_count() > 0);
         // Groovy grammar may produce partial errors for some syntax
@@ -916,7 +957,9 @@ enum Color {
 $greeting = Get-Greeting -Name "World"
 Write-Host $greeting
 "#;
-        let tree = parser.parse(source, Language::PowerShell).expect("should parse PowerShell");
+        let tree = parser
+            .parse(source, Language::PowerShell)
+            .expect("should parse PowerShell");
         let root = tree.root_node();
         assert_eq!(root.kind(), "program");
         assert!(root.child_count() > 0);
@@ -938,7 +981,9 @@ Write-Host $greeting
 (defn -main [& args]
   (println (greet "World")))
 "#;
-        let tree = parser.parse(source, Language::Clojure).expect("should parse Clojure");
+        let tree = parser
+            .parse(source, Language::Clojure)
+            .expect("should parse Clojure");
         let root = tree.root_node();
         assert_eq!(root.kind(), "source");
         assert!(root.child_count() > 0);
@@ -964,7 +1009,9 @@ add(a, b) = a + b
 
 end # module
 "#;
-        let tree = parser.parse(source, Language::Julia).expect("should parse Julia");
+        let tree = parser
+            .parse(source, Language::Julia)
+            .expect("should parse Julia");
         let root = tree.root_node();
         assert_eq!(root.kind(), "source_file");
         assert!(root.child_count() > 0);
@@ -1010,7 +1057,9 @@ greet(Name) ->
 main() ->
     io:format("~s~n", [greet("World")]).
 "#;
-        let tree = parser.parse(source, Language::Erlang).expect("should parse Erlang");
+        let tree = parser
+            .parse(source, Language::Erlang)
+            .expect("should parse Erlang");
         let root = tree.root_node();
         assert_eq!(root.kind(), "source_file");
         assert!(root.child_count() > 0);
@@ -1042,7 +1091,9 @@ greet name =
 main =
     text (greet "World")
 "#;
-        let tree = parser.parse(source, Language::Elm).expect("should parse Elm");
+        let tree = parser
+            .parse(source, Language::Elm)
+            .expect("should parse Elm");
         let root = tree.root_node();
         assert_eq!(root.kind(), "file");
         assert!(root.child_count() > 0);
@@ -1071,7 +1122,9 @@ function add(a, b) result(c)
     c = a + b
 end function add
 "#;
-        let tree = parser.parse(source, Language::Fortran).expect("should parse Fortran");
+        let tree = parser
+            .parse(source, Language::Fortran)
+            .expect("should parse Fortran");
         let root = tree.root_node();
         assert_eq!(root.kind(), "translation_unit");
         assert!(root.child_count() > 0);
@@ -1094,7 +1147,9 @@ in {
   result = add 3 4;
 }
 "#;
-        let tree = parser.parse(source, Language::Nix).expect("should parse Nix");
+        let tree = parser
+            .parse(source, Language::Nix)
+            .expect("should parse Nix");
         let root = tree.root_node();
         assert_eq!(root.kind(), "source_code");
         assert!(root.child_count() > 0);
@@ -1270,6 +1325,414 @@ in {
                 ts_lang.version(),
                 tree_sitter::LANGUAGE_VERSION
             );
+        }
+    }
+
+    // =====================================================================
+    // Parameterized parser initialization tests (test-case)
+    // =====================================================================
+
+    use test_case::test_case;
+
+    #[test_case(Language::TypeScript ; "parser_init_typescript")]
+    #[test_case(Language::Tsx ; "parser_init_tsx")]
+    #[test_case(Language::JavaScript ; "parser_init_javascript")]
+    #[test_case(Language::Jsx ; "parser_init_jsx")]
+    #[test_case(Language::Python ; "parser_init_python")]
+    #[test_case(Language::Go ; "parser_init_go")]
+    #[test_case(Language::Rust ; "parser_init_rust")]
+    #[test_case(Language::Java ; "parser_init_java")]
+    #[test_case(Language::C ; "parser_init_c")]
+    #[test_case(Language::Cpp ; "parser_init_cpp")]
+    #[test_case(Language::CSharp ; "parser_init_csharp")]
+    #[test_case(Language::Php ; "parser_init_php")]
+    #[test_case(Language::Ruby ; "parser_init_ruby")]
+    #[test_case(Language::Swift ; "parser_init_swift")]
+    #[test_case(Language::Kotlin ; "parser_init_kotlin")]
+    #[test_case(Language::Bash ; "parser_init_bash")]
+    #[test_case(Language::Scala ; "parser_init_scala")]
+    #[test_case(Language::Dart ; "parser_init_dart")]
+    #[test_case(Language::Zig ; "parser_init_zig")]
+    #[test_case(Language::Lua ; "parser_init_lua")]
+    #[test_case(Language::Verilog ; "parser_init_verilog")]
+    #[test_case(Language::Haskell ; "parser_init_haskell")]
+    #[test_case(Language::Elixir ; "parser_init_elixir")]
+    #[test_case(Language::Groovy ; "parser_init_groovy")]
+    #[test_case(Language::PowerShell ; "parser_init_powershell")]
+    #[test_case(Language::Clojure ; "parser_init_clojure")]
+    #[test_case(Language::Julia ; "parser_init_julia")]
+    #[test_case(Language::R ; "parser_init_r")]
+    #[test_case(Language::Erlang ; "parser_init_erlang")]
+    #[test_case(Language::Elm ; "parser_init_elm")]
+    #[test_case(Language::Fortran ; "parser_init_fortran")]
+    #[test_case(Language::Nix ; "parser_init_nix")]
+    fn parser_initializes_for_language(lang: Language) {
+        let parser = CodeParser::new();
+        let result = parser.parse("", lang);
+        assert!(
+            result.is_ok(),
+            "Parser should initialize for {:?}: {:?}",
+            lang,
+            result.err()
+        );
+    }
+
+    // =====================================================================
+    // Parameterized query loading tests
+    // =====================================================================
+
+    #[test_case(Language::TypeScript ; "query_load_typescript")]
+    #[test_case(Language::Tsx ; "query_load_tsx")]
+    #[test_case(Language::JavaScript ; "query_load_javascript")]
+    #[test_case(Language::Jsx ; "query_load_jsx")]
+    #[test_case(Language::Python ; "query_load_python")]
+    #[test_case(Language::Go ; "query_load_go")]
+    #[test_case(Language::Rust ; "query_load_rust")]
+    #[test_case(Language::Java ; "query_load_java")]
+    #[test_case(Language::C ; "query_load_c")]
+    #[test_case(Language::Cpp ; "query_load_cpp")]
+    #[test_case(Language::CSharp ; "query_load_csharp")]
+    #[test_case(Language::Php ; "query_load_php")]
+    #[test_case(Language::Ruby ; "query_load_ruby")]
+    #[test_case(Language::Swift ; "query_load_swift")]
+    #[test_case(Language::Kotlin ; "query_load_kotlin")]
+    #[test_case(Language::Bash ; "query_load_bash")]
+    #[test_case(Language::Scala ; "query_load_scala")]
+    #[test_case(Language::Dart ; "query_load_dart")]
+    #[test_case(Language::Zig ; "query_load_zig")]
+    #[test_case(Language::Lua ; "query_load_lua")]
+    #[test_case(Language::Verilog ; "query_load_verilog")]
+    #[test_case(Language::Haskell ; "query_load_haskell")]
+    #[test_case(Language::Elixir ; "query_load_elixir")]
+    #[test_case(Language::Groovy ; "query_load_groovy")]
+    #[test_case(Language::PowerShell ; "query_load_powershell")]
+    #[test_case(Language::Clojure ; "query_load_clojure")]
+    #[test_case(Language::Julia ; "query_load_julia")]
+    #[test_case(Language::R ; "query_load_r")]
+    #[test_case(Language::Erlang ; "query_load_erlang")]
+    #[test_case(Language::Elm ; "query_load_elm")]
+    #[test_case(Language::Fortran ; "query_load_fortran")]
+    #[test_case(Language::Nix ; "query_load_nix")]
+    fn query_loads_successfully(lang: Language) {
+        let result = CodeParser::load_query(lang);
+        assert!(
+            result.is_ok(),
+            "Query should load for {:?}: {:?}",
+            lang,
+            result.err()
+        );
+        let query = result.unwrap();
+        assert!(
+            query.pattern_count() > 0,
+            "{:?} query should have at least one pattern",
+            lang
+        );
+    }
+
+    // =====================================================================
+    // Parameterized detect_language tests
+    // =====================================================================
+
+    #[test_case("main.ts", Some(Language::TypeScript) ; "detect_ts")]
+    #[test_case("app.tsx", Some(Language::Tsx) ; "detect_tsx")]
+    #[test_case("index.js", Some(Language::JavaScript) ; "detect_js")]
+    #[test_case("entry.mjs", Some(Language::JavaScript) ; "detect_mjs")]
+    #[test_case("util.cjs", Some(Language::JavaScript) ; "detect_cjs")]
+    #[test_case("Component.jsx", Some(Language::Jsx) ; "detect_jsx")]
+    #[test_case("script.py", Some(Language::Python) ; "detect_py")]
+    #[test_case("server.go", Some(Language::Go) ; "detect_go")]
+    #[test_case("lib.rs", Some(Language::Rust) ; "detect_rs")]
+    #[test_case("Main.java", Some(Language::Java) ; "detect_java")]
+    #[test_case("main.c", Some(Language::C) ; "detect_c")]
+    #[test_case("header.h", Some(Language::C) ; "detect_h")]
+    #[test_case("app.cpp", Some(Language::Cpp) ; "detect_cpp")]
+    #[test_case("util.cc", Some(Language::Cpp) ; "detect_cc")]
+    #[test_case("helper.cxx", Some(Language::Cpp) ; "detect_cxx")]
+    #[test_case("types.hpp", Some(Language::Cpp) ; "detect_hpp")]
+    #[test_case("Program.cs", Some(Language::CSharp) ; "detect_cs")]
+    #[test_case("index.php", Some(Language::Php) ; "detect_php")]
+    #[test_case("app.rb", Some(Language::Ruby) ; "detect_rb")]
+    #[test_case("App.swift", Some(Language::Swift) ; "detect_swift")]
+    #[test_case("Main.kt", Some(Language::Kotlin) ; "detect_kt")]
+    #[test_case("build.kts", Some(Language::Kotlin) ; "detect_kts")]
+    #[test_case("deploy.sh", Some(Language::Bash) ; "detect_sh")]
+    #[test_case("init.bash", Some(Language::Bash) ; "detect_bash")]
+    #[test_case("setup.zsh", Some(Language::Bash) ; "detect_zsh")]
+    #[test_case("App.scala", Some(Language::Scala) ; "detect_scala")]
+    #[test_case("widget.dart", Some(Language::Dart) ; "detect_dart")]
+    #[test_case("build.zig", Some(Language::Zig) ; "detect_zig")]
+    #[test_case("init.lua", Some(Language::Lua) ; "detect_lua")]
+    #[test_case("chip.v", Some(Language::Verilog) ; "detect_v")]
+    #[test_case("chip.sv", Some(Language::Verilog) ; "detect_sv")]
+    #[test_case("Main.hs", Some(Language::Haskell) ; "detect_hs")]
+    #[test_case("lib.ex", Some(Language::Elixir) ; "detect_ex")]
+    #[test_case("test.exs", Some(Language::Elixir) ; "detect_exs")]
+    #[test_case("build.groovy", Some(Language::Groovy) ; "detect_groovy")]
+    #[test_case("build.gradle", Some(Language::Groovy) ; "detect_gradle")]
+    #[test_case("script.ps1", Some(Language::PowerShell) ; "detect_ps1")]
+    #[test_case("core.clj", Some(Language::Clojure) ; "detect_clj")]
+    #[test_case("main.jl", Some(Language::Julia) ; "detect_jl")]
+    #[test_case("analysis.R", Some(Language::R) ; "detect_R")]
+    #[test_case("server.erl", Some(Language::Erlang) ; "detect_erl")]
+    #[test_case("Main.elm", Some(Language::Elm) ; "detect_elm")]
+    #[test_case("solver.f90", Some(Language::Fortran) ; "detect_f90")]
+    #[test_case("solver.f95", Some(Language::Fortran) ; "detect_f95")]
+    #[test_case("config.nix", Some(Language::Nix) ; "detect_nix")]
+    #[test_case("README.md", None ; "detect_md_none")]
+    #[test_case("Cargo.toml", None ; "detect_toml_none")]
+    #[test_case("Makefile", None ; "detect_makefile_none")]
+    #[test_case("no_extension", None ; "detect_no_ext_none")]
+    #[test_case(".gitignore", None ; "detect_dotfile_none")]
+    fn detect_language_parameterized(path: &str, expected: Option<Language>) {
+        assert_eq!(
+            CodeParser::detect_language(path),
+            expected,
+            "detect_language({path:?})"
+        );
+    }
+
+    // =====================================================================
+    // Parameterized is_supported tests
+    // =====================================================================
+
+    #[test_case("foo.ts", true ; "supported_ts")]
+    #[test_case("bar.py", true ; "supported_py")]
+    #[test_case("baz.go", true ; "supported_go")]
+    #[test_case("qux.rs", true ; "supported_rs")]
+    #[test_case("test.lua", true ; "supported_lua")]
+    #[test_case("test.nix", true ; "supported_nix")]
+    #[test_case("test.f90", true ; "supported_f90")]
+    #[test_case("test.elm", true ; "supported_elm")]
+    #[test_case("readme.md", false ; "unsupported_md")]
+    #[test_case("config.yaml", false ; "unsupported_yaml")]
+    #[test_case("", false ; "unsupported_empty")]
+    #[test_case("Dockerfile", false ; "unsupported_dockerfile")]
+    #[test_case("package.json", false ; "unsupported_json")]
+    fn is_supported_parameterized(path: &str, expected: bool) {
+        assert_eq!(
+            CodeParser::is_supported(path),
+            expected,
+            "is_supported({path:?})"
+        );
+    }
+
+    // =====================================================================
+    // Parser parses non-trivial source for each language
+    // =====================================================================
+
+    #[test_case(Language::TypeScript, "const x: number = 42;", "program" ; "parse_trivial_ts")]
+    #[test_case(Language::JavaScript, "function f() { return 1; }", "program" ; "parse_trivial_js")]
+    #[test_case(Language::Python, "def f():\n    pass\n", "module" ; "parse_trivial_py")]
+    #[test_case(Language::Go, "package main\nfunc main() {}\n", "source_file" ; "parse_trivial_go")]
+    #[test_case(Language::Rust, "fn main() {}\n", "source_file" ; "parse_trivial_rust")]
+    #[test_case(Language::Java, "class Foo {}\n", "program" ; "parse_trivial_java")]
+    #[test_case(Language::C, "int main() { return 0; }\n", "translation_unit" ; "parse_trivial_c")]
+    #[test_case(Language::Cpp, "int main() { return 0; }\n", "translation_unit" ; "parse_trivial_cpp")]
+    #[test_case(Language::CSharp, "class Foo {}\n", "compilation_unit" ; "parse_trivial_csharp")]
+    #[test_case(Language::Php, "<?php function f() {} \n", "program" ; "parse_trivial_php")]
+    #[test_case(Language::Ruby, "def foo; end\n", "program" ; "parse_trivial_ruby")]
+    #[test_case(Language::Swift, "func main() {}\n", "source_file" ; "parse_trivial_swift")]
+    #[test_case(Language::Kotlin, "fun main() {}\n", "source_file" ; "parse_trivial_kotlin")]
+    #[test_case(Language::Bash, "echo hello\n", "program" ; "parse_trivial_bash")]
+    #[test_case(Language::Scala, "object Main {}\n", "compilation_unit" ; "parse_trivial_scala")]
+    #[test_case(Language::Zig, "pub fn main() void {}\n", "source_file" ; "parse_trivial_zig")]
+    #[test_case(Language::Lua, "print('hello')\n", "chunk" ; "parse_trivial_lua")]
+    #[test_case(Language::Haskell, "module Main where\nmain = putStrLn \"hi\"\n", "haskell" ; "parse_trivial_haskell")]
+    #[test_case(Language::Elixir, "defmodule M do\nend\n", "source" ; "parse_trivial_elixir")]
+    #[test_case(Language::PowerShell, "function Get-Foo { }\n", "program" ; "parse_trivial_powershell")]
+    #[test_case(Language::Clojure, "(defn foo [] nil)\n", "source" ; "parse_trivial_clojure")]
+    #[test_case(Language::Julia, "function f()\nend\n", "source_file" ; "parse_trivial_julia")]
+    #[test_case(Language::R, "f <- function() { 1 }\n", "program" ; "parse_trivial_r")]
+    #[test_case(Language::Erlang, "-module(m).\n", "source_file" ; "parse_trivial_erlang")]
+    #[test_case(Language::Elm, "module Main exposing (..)\n\nmain = 42\n", "file" ; "parse_trivial_elm")]
+    #[test_case(Language::Fortran, "program hello\nend program hello\n", "translation_unit" ; "parse_trivial_fortran")]
+    #[test_case(Language::Nix, "{ a = 1; }\n", "source_code" ; "parse_trivial_nix")]
+    fn parse_trivial_source(lang: Language, source: &str, expected_root: &str) {
+        let parser = CodeParser::new();
+        let tree = parser.parse(source, lang).unwrap_or_else(|e| {
+            panic!("Failed to parse {:?}: {:?}", lang, e);
+        });
+        let root = tree.root_node();
+        assert_eq!(root.kind(), expected_root, "Root node kind for {:?}", lang);
+        assert!(
+            root.child_count() > 0 || source.trim().is_empty(),
+            "Expected children for {:?}",
+            lang
+        );
+    }
+
+    // =====================================================================
+    // CodeParser::new() and Default
+    // =====================================================================
+
+    #[test]
+    fn code_parser_default_works() {
+        let parser = CodeParser::default();
+        let tree = parser.parse("fn main() {}", Language::Rust);
+        assert!(tree.is_ok());
+    }
+
+    // =====================================================================
+    // Query capture name tests for various languages
+    // =====================================================================
+
+    #[test]
+    fn typescript_query_captures_function_class_method() {
+        let query = CodeParser::load_query(Language::TypeScript).unwrap();
+        let names: Vec<&str> = query.capture_names().iter().copied().collect();
+        assert!(names.contains(&"name"), "TS missing @name");
+        assert!(
+            names.contains(&"definition.function"),
+            "TS missing @definition.function"
+        );
+        assert!(
+            names.contains(&"definition.class"),
+            "TS missing @definition.class"
+        );
+        assert!(
+            names.contains(&"definition.method"),
+            "TS missing @definition.method"
+        );
+    }
+
+    #[test]
+    fn python_query_captures_function_class() {
+        let query = CodeParser::load_query(Language::Python).unwrap();
+        let names: Vec<&str> = query.capture_names().iter().copied().collect();
+        assert!(names.contains(&"name"), "Python missing @name");
+        assert!(
+            names.contains(&"definition.function"),
+            "Python missing @definition.function"
+        );
+        assert!(
+            names.contains(&"definition.class"),
+            "Python missing @definition.class"
+        );
+    }
+
+    #[test]
+    fn rust_query_captures_function_struct_trait() {
+        let query = CodeParser::load_query(Language::Rust).unwrap();
+        let names: Vec<&str> = query.capture_names().iter().copied().collect();
+        assert!(names.contains(&"name"), "Rust missing @name");
+        assert!(
+            names.contains(&"definition.function"),
+            "Rust missing @definition.function"
+        );
+    }
+
+    #[test]
+    fn go_query_captures_function() {
+        let query = CodeParser::load_query(Language::Go).unwrap();
+        let names: Vec<&str> = query.capture_names().iter().copied().collect();
+        assert!(names.contains(&"name"), "Go missing @name");
+        assert!(
+            names.contains(&"definition.function"),
+            "Go missing @definition.function"
+        );
+    }
+
+    #[test]
+    fn java_query_captures_class_method() {
+        let query = CodeParser::load_query(Language::Java).unwrap();
+        let names: Vec<&str> = query.capture_names().iter().copied().collect();
+        assert!(names.contains(&"name"), "Java missing @name");
+        assert!(
+            names.contains(&"definition.class"),
+            "Java missing @definition.class"
+        );
+    }
+
+    // =====================================================================
+    // Parse with syntax errors still produces tree
+    // =====================================================================
+
+    #[test]
+    fn parse_with_syntax_errors_still_returns_tree() {
+        let parser = CodeParser::new();
+        // Invalid TypeScript: missing closing brace
+        let source = "function foo() {";
+        let tree = parser.parse(source, Language::TypeScript);
+        assert!(
+            tree.is_ok(),
+            "Parser should return tree even for broken syntax"
+        );
+        let tree = tree.unwrap();
+        // Tree may have errors but still parses
+        assert!(tree.root_node().has_error() || tree.root_node().child_count() > 0);
+    }
+
+    #[test]
+    fn parse_syntax_error_python_still_returns_tree() {
+        let parser = CodeParser::new();
+        let source = "def foo(\n    :\n";
+        let tree = parser.parse(source, Language::Python);
+        assert!(tree.is_ok());
+    }
+
+    #[test]
+    fn parse_very_long_source() {
+        let parser = CodeParser::new();
+        // Build a 1000-line source
+        let mut source = String::new();
+        for i in 0..1000 {
+            source.push_str(&format!("fn func_{i}() {{ }}\n"));
+        }
+        let tree = parser.parse(&source, Language::Rust).unwrap();
+        assert!(tree.root_node().child_count() >= 1000);
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn parse_unicode_source() {
+        let parser = CodeParser::new();
+        let source = "fn greet() -> String { String::from(\"Merhaba Dunya!\") }\n";
+        let tree = parser.parse(source, Language::Rust).unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    // =====================================================================
+    // Nested path detection
+    // =====================================================================
+
+    #[test]
+    fn detect_language_nested_paths() {
+        assert_eq!(
+            CodeParser::detect_language("src/lib/deep/nested/app.ts"),
+            Some(Language::TypeScript)
+        );
+        assert_eq!(
+            CodeParser::detect_language("/absolute/path/to/main.py"),
+            Some(Language::Python)
+        );
+        assert_eq!(
+            CodeParser::detect_language("../relative/path.go"),
+            Some(Language::Go)
+        );
+    }
+
+    // =====================================================================
+    // Property-based tests
+    // =====================================================================
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn detect_language_never_panics(path in "\\PC{0,100}") {
+            let _ = CodeParser::detect_language(&path);
+        }
+
+        #[test]
+        fn is_supported_never_panics(path in "\\PC{0,100}") {
+            let _ = CodeParser::is_supported(&path);
+        }
+
+        #[test]
+        fn is_supported_agrees_with_detect_language(path in "[a-z]{1,10}\\.[a-z]{1,5}") {
+            let detected = CodeParser::detect_language(&path);
+            let supported = CodeParser::is_supported(&path);
+            assert_eq!(detected.is_some(), supported);
         }
     }
 }

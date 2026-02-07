@@ -127,6 +127,7 @@ pub(crate) fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, CodeGra
 }
 
 /// Verify that `repo_path` is inside a git repository.
+#[allow(dead_code)]
 pub(crate) fn ensure_git_repo(repo_path: &Path) -> Result<(), CodeGraphError> {
     run_git(repo_path, &["rev-parse", "--git-dir"])?;
     Ok(())

@@ -95,11 +95,12 @@ pub fn recent_changes(repo_path: &Path, limit: usize) -> Result<Vec<CommitInfo>,
 pub fn commit_diff(repo_path: &Path, commit_hash: &str) -> Result<DiffInfo, CodeGraphError> {
     validate_input(commit_hash, "commit_hash")?;
 
-    // Get the stat summary
+    // Get the stat summary (--root handles the initial commit with no parent)
     let stat_output = run_git(
         repo_path,
         &[
             "diff-tree",
+            "--root",
             "--no-commit-id",
             "--numstat",
             "-r",
@@ -110,7 +111,7 @@ pub fn commit_diff(repo_path: &Path, commit_hash: &str) -> Result<DiffInfo, Code
     // Get the full patch
     let patch_output = run_git(
         repo_path,
-        &["diff-tree", "--no-commit-id", "-p", commit_hash],
+        &["diff-tree", "--root", "--no-commit-id", "-p", commit_hash],
     )?;
 
     // Parse numstat lines: "added\tremoved\tfile"
@@ -544,5 +545,365 @@ mod tests {
         let changes = recent_changes(&path, 1).unwrap();
         // Last commit touched lib.rs
         assert!(changes[0].files_changed.contains(&"lib.rs".to_string()));
+    }
+
+    // =====================================================================
+    // Additional file_history tests
+    // =====================================================================
+
+    #[test]
+    fn test_file_history_returns_newest_first() {
+        let (_dir, path) = create_test_repo();
+        let history = file_history(&path, "lib.rs", 10).unwrap();
+        assert_eq!(history.len(), 2);
+        // "add sub function" is newer than "add println and lib"
+        assert_eq!(history[0].message, "add sub function");
+        assert_eq!(history[1].message, "add println and lib");
+    }
+
+    #[test]
+    fn test_file_history_includes_files_changed() {
+        let (_dir, path) = create_test_repo();
+        let history = file_history(&path, "lib.rs", 10).unwrap();
+        for commit in &history {
+            assert!(
+                commit.files_changed.contains(&"lib.rs".to_string()),
+                "commit {} should include lib.rs in files_changed",
+                commit.hash
+            );
+        }
+    }
+
+    #[test]
+    fn test_file_history_email_populated() {
+        let (_dir, path) = create_test_repo();
+        let history = file_history(&path, "main.rs", 10).unwrap();
+        for commit in &history {
+            assert_eq!(commit.email, "test@example.com");
+        }
+    }
+
+    #[test]
+    fn test_file_history_date_is_iso8601() {
+        let (_dir, path) = create_test_repo();
+        let history = file_history(&path, "main.rs", 10).unwrap();
+        for commit in &history {
+            // ISO 8601 dates contain 'T' or at least '-'
+            assert!(
+                commit.date.contains('-'),
+                "date should be ISO-8601: {}",
+                commit.date
+            );
+        }
+    }
+
+    #[test]
+    fn test_file_history_limit_zero_returns_nothing() {
+        let (_dir, path) = create_test_repo();
+        // limit=0 should effectively return nothing
+        let history = file_history(&path, "main.rs", 0).unwrap();
+        assert!(history.is_empty());
+    }
+
+    #[test]
+    fn test_file_history_limit_exceeds_total() {
+        let (_dir, path) = create_test_repo();
+        let history = file_history(&path, "main.rs", 100).unwrap();
+        assert_eq!(history.len(), 2, "Only 2 commits touch main.rs");
+    }
+
+    #[test]
+    fn test_file_history_hash_length() {
+        let (_dir, path) = create_test_repo();
+        let history = file_history(&path, "main.rs", 10).unwrap();
+        for commit in &history {
+            assert_eq!(
+                commit.hash.len(),
+                40,
+                "hash should be 40 chars: {}",
+                commit.hash
+            );
+        }
+    }
+
+    // =====================================================================
+    // Additional recent_changes tests
+    // =====================================================================
+
+    #[test]
+    fn test_recent_changes_returns_all_commits() {
+        let (_dir, path) = create_test_repo();
+        let changes = recent_changes(&path, 100).unwrap();
+        assert_eq!(changes.len(), 3);
+    }
+
+    #[test]
+    fn test_recent_changes_newest_first() {
+        let (_dir, path) = create_test_repo();
+        let changes = recent_changes(&path, 10).unwrap();
+        assert_eq!(changes[0].message, "add sub function");
+        assert_eq!(changes[1].message, "add println and lib");
+        assert_eq!(changes[2].message, "first commit");
+    }
+
+    #[test]
+    fn test_recent_changes_limit_one() {
+        let (_dir, path) = create_test_repo();
+        let changes = recent_changes(&path, 1).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].message, "add sub function");
+    }
+
+    #[test]
+    fn test_recent_changes_includes_files_changed() {
+        let (_dir, path) = create_test_repo();
+        let changes = recent_changes(&path, 3).unwrap();
+        // The second commit (index 1) should have both main.rs and lib.rs
+        assert!(changes[1].files_changed.contains(&"main.rs".to_string()));
+        assert!(changes[1].files_changed.contains(&"lib.rs".to_string()));
+    }
+
+    #[test]
+    fn test_recent_changes_not_a_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = recent_changes(dir.path(), 10);
+        assert!(result.is_err());
+    }
+
+    // =====================================================================
+    // Additional commit_diff tests
+    // =====================================================================
+
+    #[test]
+    fn test_commit_diff_non_root_has_additions_and_deletions() {
+        let (_dir, path) = create_test_repo();
+        let changes = recent_changes(&path, 10).unwrap();
+        // Use the second commit (not root), which modified main.rs and added lib.rs
+        let second_hash = &changes[1].hash;
+
+        let diff = commit_diff(&path, second_hash).unwrap();
+        assert_eq!(diff.commit, *second_hash);
+        assert!(
+            !diff.files.is_empty(),
+            "second commit should have file changes"
+        );
+        // The second commit touched both main.rs and lib.rs
+        let lib_diff = diff.files.iter().find(|f| f.path == "lib.rs");
+        assert!(lib_diff.is_some(), "second commit should include lib.rs");
+        assert!(lib_diff.unwrap().additions > 0);
+    }
+
+    #[test]
+    fn test_commit_diff_patch_contains_diff_header() {
+        let (_dir, path) = create_test_repo();
+        let changes = recent_changes(&path, 1).unwrap();
+        let hash = &changes[0].hash;
+
+        let diff = commit_diff(&path, hash).unwrap();
+        for file in &diff.files {
+            if !file.patch.is_empty() {
+                assert!(
+                    file.patch.contains("diff --git"),
+                    "patch should contain diff header"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_commit_diff_additions_and_deletions_counted() {
+        let (_dir, path) = create_test_repo();
+        // The "add sub function" commit adds a line to lib.rs
+        let changes = recent_changes(&path, 1).unwrap();
+        let hash = &changes[0].hash;
+
+        let diff = commit_diff(&path, hash).unwrap();
+        let lib_diff = diff.files.iter().find(|f| f.path == "lib.rs").unwrap();
+        assert!(lib_diff.additions > 0, "should have additions");
+    }
+
+    #[test]
+    fn test_commit_diff_hash_too_short() {
+        let (_dir, path) = create_test_repo();
+        let result = commit_diff(&path, "abc");
+        assert!(result.is_err());
+    }
+
+    // =====================================================================
+    // Additional symbol_history tests
+    // =====================================================================
+
+    #[test]
+    fn test_symbol_history_finds_main() {
+        let (_dir, path) = create_test_repo();
+        let history = symbol_history(&path, "main").unwrap();
+        assert!(!history.is_empty(), "should find 'main' in history");
+    }
+
+    #[test]
+    fn test_symbol_history_finds_add() {
+        let (_dir, path) = create_test_repo();
+        let history = symbol_history(&path, "add").unwrap();
+        // "add" appears in the function name "add" in lib.rs
+        assert!(!history.is_empty());
+    }
+
+    #[test]
+    fn test_symbol_history_empty_string() {
+        let (_dir, path) = create_test_repo();
+        // Empty string should match all commits (everything contains "")
+        let history = symbol_history(&path, "x_y_z_never_exists_qqqqqq").unwrap();
+        assert!(history.is_empty());
+    }
+
+    // =====================================================================
+    // Additional branch_info tests
+    // =====================================================================
+
+    #[test]
+    fn test_branch_info_status_is_up_to_date_for_local() {
+        let (_dir, path) = create_test_repo();
+        let info = branch_info(&path).unwrap();
+        assert_eq!(info.status, "up-to-date");
+    }
+
+    #[test]
+    fn test_branch_info_not_a_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = branch_info(dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_branch_info_detached_head() {
+        let (_dir, path) = create_test_repo();
+        let changes = recent_changes(&path, 1).unwrap();
+        let hash = &changes[0].hash;
+        // Detach HEAD
+        std::process::Command::new("git")
+            .args(["checkout", hash])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+
+        let info = branch_info(&path).unwrap();
+        assert_eq!(info.current, "HEAD (detached)");
+    }
+
+    // =====================================================================
+    // Additional modified_files tests
+    // =====================================================================
+
+    #[test]
+    fn test_modified_files_not_a_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = modified_files(dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_modified_files_staged_and_unstaged_same_file() {
+        let (_dir, path) = create_test_repo();
+        // Stage a change
+        std::fs::write(path.join("main.rs"), "fn main() { /* v1 */ }\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "main.rs"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        // Then modify again without staging
+        std::fs::write(path.join("main.rs"), "fn main() { /* v2 */ }\n").unwrap();
+
+        let mods = modified_files(&path).unwrap();
+        assert!(
+            mods.staged.contains(&"main.rs".to_string()),
+            "should be in staged"
+        );
+        assert!(
+            mods.unstaged.contains(&"main.rs".to_string()),
+            "should be in unstaged"
+        );
+    }
+
+    #[test]
+    fn test_modified_files_multiple_untracked() {
+        let (_dir, path) = create_test_repo();
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        std::fs::write(path.join("c.txt"), "c").unwrap();
+
+        let mods = modified_files(&path).unwrap();
+        assert_eq!(mods.untracked.len(), 3);
+    }
+
+    #[test]
+    fn test_modified_files_deleted_file_shows_unstaged() {
+        let (_dir, path) = create_test_repo();
+        // Delete a tracked file
+        std::fs::remove_file(path.join("main.rs")).unwrap();
+
+        let mods = modified_files(&path).unwrap();
+        assert!(mods.unstaged.contains(&"main.rs".to_string()));
+    }
+
+    // =====================================================================
+    // parse_log_with_files edge cases
+    // =====================================================================
+
+    #[test]
+    fn test_parse_log_with_files_single_commit() {
+        let (_dir, path) = create_test_repo();
+        let changes = recent_changes(&path, 1).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert!(!changes[0].hash.is_empty());
+        assert!(!changes[0].author.is_empty());
+        assert!(!changes[0].message.is_empty());
+    }
+
+    #[test]
+    fn test_parse_log_with_files_malformed_input() {
+        let result = parse_log_with_files("this is not valid git log output\n");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_log_with_files_only_blank_lines() {
+        let result = parse_log_with_files("\n\n\n");
+        assert!(result.is_empty());
+    }
+
+    // =====================================================================
+    // extract_file_patch tests
+    // =====================================================================
+
+    #[test]
+    fn test_extract_file_patch_found() {
+        let full_patch = "diff --git a/foo.rs b/foo.rs\n--- a/foo.rs\n+++ b/foo.rs\n@@ -1,1 +1,2 @@\n+new line\ndiff --git a/bar.rs b/bar.rs\n--- a/bar.rs\n";
+        let patch = extract_file_patch(full_patch, "foo.rs");
+        assert!(patch.contains("diff --git a/foo.rs"));
+        assert!(patch.contains("+new line"));
+        assert!(!patch.contains("bar.rs"));
+    }
+
+    #[test]
+    fn test_extract_file_patch_not_found() {
+        let full_patch = "diff --git a/foo.rs b/foo.rs\n+++ b/foo.rs\n";
+        let patch = extract_file_patch(full_patch, "nonexistent.rs");
+        assert!(patch.is_empty());
+    }
+
+    #[test]
+    fn test_extract_file_patch_empty_input() {
+        let patch = extract_file_patch("", "foo.rs");
+        assert!(patch.is_empty());
+    }
+
+    #[test]
+    fn test_extract_file_patch_single_file_patch() {
+        let full_patch = "diff --git a/only.rs b/only.rs\n--- a/only.rs\n+++ b/only.rs\n@@ -1,1 +1,1 @@\n-old\n+new\n";
+        let patch = extract_file_patch(full_patch, "only.rs");
+        assert!(patch.contains("diff --git a/only.rs"));
+        assert!(patch.contains("-old"));
+        assert!(patch.contains("+new"));
     }
 }

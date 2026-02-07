@@ -356,4 +356,235 @@ mod tests {
         assert_eq!(added, 5);
         assert_eq!(removed, 3);
     }
+
+    // =====================================================================
+    // Additional hotspots tests
+    // =====================================================================
+
+    #[test]
+    fn test_hotspots_sorted_by_commit_count() {
+        let (_dir, path) = create_test_repo();
+        let hs = hotspots(&path, 10).unwrap();
+        for window in hs.windows(2) {
+            assert!(
+                window[0].commit_count >= window[1].commit_count,
+                "hotspots should be sorted descending"
+            );
+        }
+    }
+
+    #[test]
+    fn test_hotspots_top_file_score_is_one() {
+        let (_dir, path) = create_test_repo();
+        let hs = hotspots(&path, 10).unwrap();
+        assert!(!hs.is_empty());
+        assert!(
+            (hs[0].score - 1.0).abs() < f64::EPSILON,
+            "top file should have score 1.0, got {}",
+            hs[0].score
+        );
+    }
+
+    #[test]
+    fn test_hotspots_all_files_present() {
+        let (_dir, path) = create_test_repo();
+        let hs = hotspots(&path, 10).unwrap();
+        let files: Vec<&str> = hs.iter().map(|h| h.file.as_str()).collect();
+        assert!(files.contains(&"app.rs"), "should contain app.rs");
+        assert!(files.contains(&"lib.rs"), "should contain lib.rs");
+    }
+
+    #[test]
+    fn test_hotspots_limit_zero() {
+        let (_dir, path) = create_test_repo();
+        let hs = hotspots(&path, 0).unwrap();
+        assert!(hs.is_empty());
+    }
+
+    #[test]
+    fn test_hotspots_not_a_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = hotspots(dir.path(), 10);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_hotspots_score_between_zero_and_one() {
+        let (_dir, path) = create_test_repo();
+        let hs = hotspots(&path, 10).unwrap();
+        for h in &hs {
+            assert!(
+                h.score > 0.0 && h.score <= 1.0,
+                "score should be in (0, 1]: {}",
+                h.score
+            );
+        }
+    }
+
+    #[test]
+    fn test_hotspots_commit_count_positive() {
+        let (_dir, path) = create_test_repo();
+        let hs = hotspots(&path, 10).unwrap();
+        for h in &hs {
+            assert!(h.commit_count > 0, "commit_count should be positive");
+        }
+    }
+
+    #[test]
+    fn test_hotspots_last_modified_is_date_string() {
+        let (_dir, path) = create_test_repo();
+        let hs = hotspots(&path, 10).unwrap();
+        for h in &hs {
+            assert!(
+                h.last_modified.contains('-'),
+                "last_modified should look like a date: {}",
+                h.last_modified
+            );
+        }
+    }
+
+    // =====================================================================
+    // Additional contributors tests
+    // =====================================================================
+
+    #[test]
+    fn test_contributors_sorted_by_commits_desc() {
+        let (_dir, path) = create_test_repo();
+        let contribs = contributors(&path, None).unwrap();
+        for window in contribs.windows(2) {
+            assert!(
+                window[0].commits >= window[1].commits,
+                "contributors should be sorted by commits descending"
+            );
+        }
+    }
+
+    #[test]
+    fn test_contributors_alice_has_more_commits_than_bob() {
+        let (_dir, path) = create_test_repo();
+        let contribs = contributors(&path, None).unwrap();
+        let alice = contribs.iter().find(|c| c.name == "Alice").unwrap();
+        let bob = contribs.iter().find(|c| c.name == "Bob").unwrap();
+        assert!(alice.commits > bob.commits);
+    }
+
+    #[test]
+    fn test_contributors_bob_only_touched_lib() {
+        let (_dir, path) = create_test_repo();
+        let contribs = contributors(&path, Some("lib.rs")).unwrap();
+        assert_eq!(contribs.len(), 1);
+        assert_eq!(contribs[0].name, "Bob");
+    }
+
+    #[test]
+    fn test_contributors_not_a_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = contributors(dir.path(), None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_contributors_email_populated() {
+        let (_dir, path) = create_test_repo();
+        let contribs = contributors(&path, None).unwrap();
+        for c in &contribs {
+            assert!(c.email.contains('@'), "email should contain @: {}", c.email);
+        }
+    }
+
+    #[test]
+    fn test_contributors_lines_counted_are_reasonable() {
+        let (_dir, path) = create_test_repo();
+        let contribs = contributors(&path, None).unwrap();
+        for c in &contribs {
+            // Basic sanity: lines added + removed should not exceed some huge number
+            assert!(
+                c.lines_added < 100_000,
+                "unreasonable lines_added: {}",
+                c.lines_added
+            );
+            assert!(
+                c.lines_removed < 100_000,
+                "unreasonable lines_removed: {}",
+                c.lines_removed
+            );
+        }
+    }
+
+    #[test]
+    fn test_contributors_with_single_commit_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&path)
+                .env("GIT_AUTHOR_NAME", "Solo")
+                .env("GIT_AUTHOR_EMAIL", "solo@example.com")
+                .env("GIT_COMMITTER_NAME", "Solo")
+                .env("GIT_COMMITTER_EMAIL", "solo@example.com")
+                .output()
+                .unwrap()
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "solo@example.com"]);
+        git(&["config", "user.name", "Solo"]);
+        std::fs::write(path.join("main.rs"), "fn main() {}\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "solo commit"]);
+
+        let contribs = contributors(&path, None).unwrap();
+        assert_eq!(contribs.len(), 1);
+        assert_eq!(contribs[0].name, "Solo");
+        assert_eq!(contribs[0].commits, 1);
+    }
+
+    // =====================================================================
+    // parse_numstat_totals edge cases
+    // =====================================================================
+
+    #[test]
+    fn test_parse_numstat_single_line() {
+        let (added, removed) = parse_numstat_totals("7\t3\tmain.rs\n");
+        assert_eq!(added, 7);
+        assert_eq!(removed, 3);
+    }
+
+    #[test]
+    fn test_parse_numstat_only_additions() {
+        let (added, removed) = parse_numstat_totals("10\t0\tnew_file.rs\n");
+        assert_eq!(added, 10);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_parse_numstat_only_deletions() {
+        let (added, removed) = parse_numstat_totals("0\t15\told_file.rs\n");
+        assert_eq!(added, 0);
+        assert_eq!(removed, 15);
+    }
+
+    #[test]
+    fn test_parse_numstat_multiple_files() {
+        let input = "10\t5\ta.rs\n3\t2\tb.rs\n7\t1\tc.rs\n";
+        let (added, removed) = parse_numstat_totals(input);
+        assert_eq!(added, 20);
+        assert_eq!(removed, 8);
+    }
+
+    #[test]
+    fn test_parse_numstat_mixed_binary_and_text() {
+        let input = "-\t-\timage.png\n5\t3\tcode.rs\n-\t-\tfont.ttf\n2\t1\ttest.rs\n";
+        let (added, removed) = parse_numstat_totals(input);
+        assert_eq!(added, 7);
+        assert_eq!(removed, 4);
+    }
+
+    #[test]
+    fn test_parse_numstat_blank_lines() {
+        let input = "\n\n5\t3\tcode.rs\n\n";
+        let (added, removed) = parse_numstat_totals(input);
+        assert_eq!(added, 5);
+        assert_eq!(removed, 3);
+    }
 }

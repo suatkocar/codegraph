@@ -398,4 +398,476 @@ mod tests {
         assert_eq!(back.name, "foo");
         assert_eq!(back.start_line, 1);
     }
+
+    // -- Additional dead code tests (Phase 18D) --------------------------------
+
+    #[test]
+    fn interface_nodes_can_be_dead() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "i1",
+                "UnusedInterface",
+                "src/types.ts",
+                NodeKind::Interface,
+                1,
+                None,
+            ))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[NodeKind::Interface]);
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].name, "UnusedInterface");
+    }
+
+    #[test]
+    fn enum_nodes_can_be_dead() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "e1",
+                "UnusedEnum",
+                "src/enums.ts",
+                NodeKind::Enum,
+                1,
+                None,
+            ))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[NodeKind::Enum]);
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].name, "UnusedEnum");
+    }
+
+    #[test]
+    fn struct_nodes_can_be_dead() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "s1",
+                "UnusedStruct",
+                "src/models.rs",
+                NodeKind::Struct,
+                1,
+                None,
+            ))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[NodeKind::Struct]);
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].name, "UnusedStruct");
+    }
+
+    #[test]
+    fn trait_nodes_can_be_dead() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "t1",
+                "UnusedTrait",
+                "src/traits.rs",
+                NodeKind::Trait,
+                1,
+                None,
+            ))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[NodeKind::Trait]);
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].name, "UnusedTrait");
+    }
+
+    #[test]
+    fn variable_nodes_can_be_dead() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "v1",
+                "unusedVar",
+                "src/vars.ts",
+                NodeKind::Variable,
+                1,
+                None,
+            ))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[NodeKind::Variable]);
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].name, "unusedVar");
+    }
+
+    #[test]
+    fn constant_nodes_can_be_dead() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "c1",
+                "UNUSED_CONST",
+                "src/consts.ts",
+                NodeKind::Constant,
+                1,
+                None,
+            ))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[NodeKind::Constant]);
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].name, "UNUSED_CONST");
+    }
+
+    #[test]
+    fn method_nodes_can_be_dead() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "m1",
+                "unusedMethod",
+                "src/service.ts",
+                NodeKind::Method,
+                1,
+                None,
+            ))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[NodeKind::Method]);
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].name, "unusedMethod");
+    }
+
+    #[test]
+    fn property_nodes_can_be_dead() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "p1",
+                "unusedProp",
+                "src/component.ts",
+                NodeKind::Property,
+                1,
+                None,
+            ))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[NodeKind::Property]);
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].name, "unusedProp");
+    }
+
+    #[test]
+    fn excludes_files_with_spec_in_path() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "n1",
+                "helper",
+                "src/utils.spec.ts",
+                NodeKind::Function,
+                1,
+                None,
+            ))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[]);
+        assert!(dead.is_empty(), "spec files should be excluded");
+    }
+
+    #[test]
+    fn mixed_referenced_and_unreferenced() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "referenced1", "src/a.ts", NodeKind::Function, 1, None),
+                make_node(
+                    "n2",
+                    "referenced2",
+                    "src/a.ts",
+                    NodeKind::Function,
+                    10,
+                    None,
+                ),
+                make_node(
+                    "n3",
+                    "unreferenced1",
+                    "src/b.ts",
+                    NodeKind::Function,
+                    1,
+                    None,
+                ),
+                make_node(
+                    "n4",
+                    "unreferenced2",
+                    "src/b.ts",
+                    NodeKind::Function,
+                    10,
+                    None,
+                ),
+                make_node("n5", "caller", "src/c.ts", NodeKind::Function, 1, None),
+            ])
+            .unwrap();
+        store
+            .upsert_edges(&[
+                make_edge("n5", "n1", EdgeKind::Calls, "src/c.ts", 3),
+                make_edge("n5", "n2", EdgeKind::Calls, "src/c.ts", 4),
+            ])
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[]);
+        let names: Vec<&str> = dead.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"unreferenced1"));
+        assert!(names.contains(&"unreferenced2"));
+        assert!(names.contains(&"caller")); // no incoming edges
+        assert!(!names.contains(&"referenced1"));
+        assert!(!names.contains(&"referenced2"));
+    }
+
+    #[test]
+    fn imported_nodes_are_not_dead() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node(
+                    "n1",
+                    "importedFn",
+                    "src/utils.ts",
+                    NodeKind::Function,
+                    1,
+                    None,
+                ),
+                make_node("n2", "consumer", "src/app.ts", NodeKind::Function, 1, None),
+            ])
+            .unwrap();
+        store
+            .upsert_edge(&make_edge("n2", "n1", EdgeKind::Imports, "src/app.ts", 1))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[]);
+        let names: Vec<&str> = dead.iter().map(|d| d.name.as_str()).collect();
+        assert!(
+            !names.contains(&"importedFn"),
+            "imported function is not dead"
+        );
+    }
+
+    #[test]
+    fn extended_classes_are_not_dead() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "BaseClass", "src/base.ts", NodeKind::Class, 1, None),
+                make_node(
+                    "n2",
+                    "DerivedClass",
+                    "src/derived.ts",
+                    NodeKind::Class,
+                    1,
+                    None,
+                ),
+            ])
+            .unwrap();
+        store
+            .upsert_edge(&make_edge(
+                "n2",
+                "n1",
+                EdgeKind::Extends,
+                "src/derived.ts",
+                1,
+            ))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[]);
+        let names: Vec<&str> = dead.iter().map(|d| d.name.as_str()).collect();
+        assert!(!names.contains(&"BaseClass"), "extended class is not dead");
+    }
+
+    #[test]
+    fn implemented_interfaces_are_not_dead() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node(
+                    "n1",
+                    "Serializable",
+                    "src/types.ts",
+                    NodeKind::Interface,
+                    1,
+                    None,
+                ),
+                make_node("n2", "User", "src/user.ts", NodeKind::Class, 1, None),
+            ])
+            .unwrap();
+        store
+            .upsert_edge(&make_edge(
+                "n2",
+                "n1",
+                EdgeKind::Implements,
+                "src/user.ts",
+                1,
+            ))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[]);
+        let names: Vec<&str> = dead.iter().map(|d| d.name.as_str()).collect();
+        assert!(
+            !names.contains(&"Serializable"),
+            "implemented interface is not dead"
+        );
+    }
+
+    #[test]
+    fn referenced_symbols_are_not_dead() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node(
+                    "n1",
+                    "SOME_CONST",
+                    "src/config.ts",
+                    NodeKind::Constant,
+                    1,
+                    None,
+                ),
+                make_node("n2", "consumer", "src/app.ts", NodeKind::Function, 1, None),
+            ])
+            .unwrap();
+        store
+            .upsert_edge(&make_edge(
+                "n2",
+                "n1",
+                EdgeKind::References,
+                "src/app.ts",
+                5,
+            ))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[]);
+        let names: Vec<&str> = dead.iter().map(|d| d.name.as_str()).collect();
+        assert!(
+            !names.contains(&"SOME_CONST"),
+            "referenced constant is not dead"
+        );
+    }
+
+    #[test]
+    fn many_unreferenced_nodes_all_found() {
+        let store = setup();
+        let nodes: Vec<CodeNode> = (0..20)
+            .map(|i| {
+                make_node(
+                    &format!("n{}", i),
+                    &format!("fn{}", i),
+                    "src/big.ts",
+                    NodeKind::Function,
+                    i * 10,
+                    None,
+                )
+            })
+            .collect();
+        store.upsert_nodes(&nodes).unwrap();
+
+        let dead = find_dead_code(&store.conn, &[]);
+        assert_eq!(dead.len(), 20);
+    }
+
+    #[test]
+    fn namespace_nodes_can_be_dead() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "ns1",
+                "UnusedNamespace",
+                "src/ns.ts",
+                NodeKind::Namespace,
+                1,
+                None,
+            ))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[NodeKind::Namespace]);
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].name, "UnusedNamespace");
+    }
+
+    #[test]
+    fn empty_kind_filter_returns_all() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "func1", "src/a.ts", NodeKind::Function, 1, None),
+                make_node("n2", "Class1", "src/b.ts", NodeKind::Class, 1, None),
+                make_node("n3", "var1", "src/c.ts", NodeKind::Variable, 1, None),
+            ])
+            .unwrap();
+
+        let dead_all = find_dead_code(&store.conn, &[]);
+        assert_eq!(dead_all.len(), 3, "Empty kinds should return all dead code");
+    }
+
+    #[test]
+    fn contains_edge_prevents_dead_code() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("n1", "MyClass", "src/a.ts", NodeKind::Class, 1, None),
+                make_node("n2", "myMethod", "src/a.ts", NodeKind::Method, 5, None),
+            ])
+            .unwrap();
+        store
+            .upsert_edge(&make_edge("n1", "n2", EdgeKind::Contains, "src/a.ts", 5))
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[]);
+        let names: Vec<&str> = dead.iter().map(|d| d.name.as_str()).collect();
+        // n2 has an incoming Contains edge, so it's not dead
+        assert!(
+            !names.contains(&"myMethod"),
+            "contained method should not be dead"
+        );
+    }
+
+    #[test]
+    fn dead_code_result_deserializes_from_json() {
+        let json = r#"{
+            "id": "function:src/x.ts:orphan:1",
+            "name": "orphan",
+            "kind": "function",
+            "file_path": "src/x.ts",
+            "start_line": 1
+        }"#;
+        let result: DeadCodeResult = serde_json::from_str(json).unwrap();
+        assert_eq!(result.name, "orphan");
+        assert_eq!(result.kind, "function");
+        assert_eq!(result.start_line, 1);
+    }
+
+    #[test]
+    fn excludes_test_directory_patterns() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node(
+                    "n1",
+                    "helper",
+                    "tests/unit/helper.ts",
+                    NodeKind::Function,
+                    1,
+                    None,
+                ),
+                make_node(
+                    "n2",
+                    "fixture",
+                    "spec/fixtures/data.ts",
+                    NodeKind::Function,
+                    1,
+                    None,
+                ),
+            ])
+            .unwrap();
+
+        let dead = find_dead_code(&store.conn, &[]);
+        // "tests" contains "test", "spec" contains "spec" — both excluded
+        assert!(
+            dead.is_empty(),
+            "functions in test/spec directories should be excluded"
+        );
+    }
 }

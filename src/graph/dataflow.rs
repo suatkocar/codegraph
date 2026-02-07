@@ -100,13 +100,11 @@ pub fn find_def_use_chains(source: &str, language: &str) -> Vec<DefUseChain> {
 
         // Try to extract an assignment.
         if let Some((var, _value, col)) = extract_assignment(trimmed, &patterns) {
-            defs.entry(var.clone())
-                .or_default()
-                .push(Location {
-                    file_path: String::new(), // filled by caller if needed
-                    line: line_num,
-                    column: col,
-                });
+            defs.entry(var.clone()).or_default().push(Location {
+                file_path: String::new(), // filled by caller if needed
+                line: line_num,
+                column: col,
+            });
 
             // Also look for uses of OTHER variables on the RHS.
             // We'll handle this in a second pass below.
@@ -120,13 +118,11 @@ pub fn find_def_use_chains(source: &str, language: &str) -> Vec<DefUseChain> {
                     continue;
                 }
             }
-            uses.entry(var_name)
-                .or_default()
-                .push(Location {
-                    file_path: String::new(),
-                    line: line_num,
-                    column: col,
-                });
+            uses.entry(var_name).or_default().push(Location {
+                file_path: String::new(),
+                line: line_num,
+                column: col,
+            });
         }
     }
 
@@ -177,7 +173,10 @@ pub fn find_dead_stores(source: &str, language: &str) -> Vec<DeadStore> {
     // Group stores by variable to find next-assignment boundaries.
     let mut stores_by_var: HashMap<String, Vec<(u32, String)>> = HashMap::new();
     for (var, _file, line, value) in &stores {
-        stores_by_var.entry(var.clone()).or_default().push((*line, value.clone()));
+        stores_by_var
+            .entry(var.clone())
+            .or_default()
+            .push((*line, value.clone()));
     }
 
     let mut dead: Vec<DeadStore> = Vec::new();
@@ -191,10 +190,9 @@ pub fn find_dead_stores(source: &str, language: &str) -> Vec<DeadStore> {
 
             let is_used = use_lines
                 .map(|lines| {
-                    lines.iter().any(|&ul| {
-                        ul > *def_line
-                            && next_def_line.map_or(true, |nd| ul < nd)
-                    })
+                    lines
+                        .iter()
+                        .any(|&ul| ul > *def_line && next_def_line.is_none_or(|nd| ul < nd))
                 })
                 .unwrap_or(false);
 
@@ -316,11 +314,7 @@ fn extract_assignment(line: &str, patterns: &LangPatterns) -> Option<(String, St
             let var_part = trimmed[..pos].trim();
             let val_part = trimmed[pos + 2..].trim();
             if is_valid_identifier(var_part) {
-                return Some((
-                    var_part.to_string(),
-                    val_part.to_string(),
-                    0,
-                ));
+                return Some((var_part.to_string(), val_part.to_string(), 0));
             }
         }
     }
@@ -332,10 +326,15 @@ fn extract_assignment(line: &str, patterns: &LangPatterns) -> Option<(String, St
             let before = trimmed.as_bytes()[eq_pos - 1];
             let after = trimmed.as_bytes()[eq_pos + 1];
             // Reject compound/comparison operators.
-            if before != b'!' && before != b'<' && before != b'>'
-                && before != b'=' && after != b'='
-                && before != b'+' && before != b'-'
-                && before != b'*' && before != b'/'
+            if before != b'!'
+                && before != b'<'
+                && before != b'>'
+                && before != b'='
+                && after != b'='
+                && before != b'+'
+                && before != b'-'
+                && before != b'*'
+                && before != b'/'
             {
                 let var_part = trimmed[..eq_pos].trim();
                 let val_part = trimmed[eq_pos + 1..].trim();
@@ -344,11 +343,7 @@ fn extract_assignment(line: &str, patterns: &LangPatterns) -> Option<(String, St
                 let var_name = var_part.split(':').next().unwrap_or(var_part).trim();
 
                 if is_valid_identifier(var_name) {
-                    return Some((
-                        var_name.to_string(),
-                        val_part.to_string(),
-                        0,
-                    ));
+                    return Some((var_name.to_string(), val_part.to_string(), 0));
                 }
             }
         }
@@ -379,7 +374,6 @@ fn parse_var_equals(rest: &str, offset: usize) -> Option<(String, String, u32)> 
         .split(':')
         .next()
         .unwrap_or(var_part)
-        .trim()
         .split_whitespace()
         .last()
         .unwrap_or(var_part);
@@ -446,20 +440,86 @@ fn is_valid_identifier(s: &str) -> bool {
 fn is_keyword(s: &str) -> bool {
     matches!(
         s,
-        "if" | "else" | "for" | "while" | "do" | "return" | "break"
-            | "continue" | "match" | "switch" | "case" | "default"
-            | "fn" | "func" | "function" | "def" | "class" | "struct"
-            | "enum" | "trait" | "impl" | "type" | "interface"
-            | "import" | "from" | "export" | "module" | "use" | "pub"
-            | "const" | "let" | "var" | "mut" | "val" | "final"
-            | "true" | "false" | "null" | "nil" | "None" | "undefined"
-            | "new" | "this" | "self" | "Self" | "super" | "async"
-            | "await" | "yield" | "try" | "catch" | "throw" | "raise"
-            | "except" | "finally" | "with" | "as" | "in" | "is"
-            | "not" | "and" | "or" | "static" | "void" | "int"
-            | "float" | "double" | "bool" | "char" | "string" | "String"
-            | "println" | "print" | "println!" | "panic" | "panic!"
-            | "loop" | "elif" | "pass" | "lambda" | "where"
+        "if" | "else"
+            | "for"
+            | "while"
+            | "do"
+            | "return"
+            | "break"
+            | "continue"
+            | "match"
+            | "switch"
+            | "case"
+            | "default"
+            | "fn"
+            | "func"
+            | "function"
+            | "def"
+            | "class"
+            | "struct"
+            | "enum"
+            | "trait"
+            | "impl"
+            | "type"
+            | "interface"
+            | "import"
+            | "from"
+            | "export"
+            | "module"
+            | "use"
+            | "pub"
+            | "const"
+            | "let"
+            | "var"
+            | "mut"
+            | "val"
+            | "final"
+            | "true"
+            | "false"
+            | "null"
+            | "nil"
+            | "None"
+            | "undefined"
+            | "new"
+            | "this"
+            | "self"
+            | "Self"
+            | "super"
+            | "async"
+            | "await"
+            | "yield"
+            | "try"
+            | "catch"
+            | "throw"
+            | "raise"
+            | "except"
+            | "finally"
+            | "with"
+            | "as"
+            | "in"
+            | "is"
+            | "not"
+            | "and"
+            | "or"
+            | "static"
+            | "void"
+            | "int"
+            | "float"
+            | "double"
+            | "bool"
+            | "char"
+            | "string"
+            | "String"
+            | "println"
+            | "print"
+            | "println!"
+            | "panic"
+            | "panic!"
+            | "loop"
+            | "elif"
+            | "pass"
+            | "lambda"
+            | "where"
     )
 }
 
@@ -617,7 +677,10 @@ let result = count + 5;";
         assert!(!count.definitions.is_empty(), "count should be defined");
         assert!(!count.uses.is_empty(), "count should be used");
         assert!(
-            count.uses.iter().all(|u| u.line >= count.definitions[0].line),
+            count
+                .uses
+                .iter()
+                .all(|u| u.line >= count.definitions[0].line),
             "all uses of count should be after its definition"
         );
     }
@@ -727,5 +790,344 @@ let x = 10;";
         assert!(!is_valid_identifier("123abc"));
         assert!(!is_valid_identifier(""));
         assert!(!is_valid_identifier("foo bar"));
+    }
+
+    // =====================================================================
+    // NEW TESTS: Phase 18C — Dataflow comprehensive coverage
+    // =====================================================================
+
+    // -- def_use chains: TypeScript/JavaScript ----------------------------
+
+    #[test]
+    fn def_use_chain_const_declaration() {
+        let source = "const MAX = 100;\nlet result = MAX + 1;";
+        let chains = find_def_use_chains(source, "javascript");
+        let max_chain = chains.iter().find(|c| c.variable == "MAX");
+        assert!(max_chain.is_some());
+        assert!(!max_chain.unwrap().uses.is_empty());
+    }
+
+    #[test]
+    fn def_use_chain_var_declaration() {
+        let source = "var count = 0;\ncount = count + 1;\nconsole.log(count);";
+        let chains = find_def_use_chains(source, "javascript");
+        let count_chain = chains.iter().find(|c| c.variable == "count");
+        assert!(count_chain.is_some());
+        assert!(count_chain.unwrap().definitions.len() >= 1);
+        assert!(!count_chain.unwrap().uses.is_empty());
+    }
+
+    #[test]
+    fn def_use_chain_multiple_variables() {
+        let source = "\
+let x = 1;
+let y = 2;
+let z = x + y;";
+        let chains = find_def_use_chains(source, "javascript");
+        assert!(chains.iter().any(|c| c.variable == "x"));
+        assert!(chains.iter().any(|c| c.variable == "y"));
+        assert!(chains.iter().any(|c| c.variable == "z"));
+    }
+
+    // -- def_use chains: Go -----------------------------------------------
+
+    #[test]
+    fn def_use_chain_go_walrus() {
+        let source = "\
+err := doSomething()
+fmt.Println(err)";
+        let chains = find_def_use_chains(source, "go");
+        let err_chain = chains.iter().find(|c| c.variable == "err");
+        assert!(err_chain.is_some());
+        assert!(!err_chain.unwrap().uses.is_empty());
+    }
+
+    #[test]
+    fn def_use_chain_go_var_decl() {
+        let source = "\
+var total int
+total = computeTotal()
+fmt.Println(total)";
+        let chains = find_def_use_chains(source, "go");
+        let total_chain = chains.iter().find(|c| c.variable == "total");
+        assert!(total_chain.is_some());
+    }
+
+    // -- def_use chains: TypeScript with types ----------------------------
+
+    #[test]
+    fn def_use_chain_typescript_typed() {
+        let source = "let count: number = 0;\ncount = count + 1;";
+        let chains = find_def_use_chains(source, "typescript");
+        let count_chain = chains.iter().find(|c| c.variable == "count");
+        assert!(count_chain.is_some());
+    }
+
+    // -- dead stores: patterns --------------------------------------------
+
+    #[test]
+    fn dead_store_unused_variable() {
+        let source = "let unused = 42;\nlet used = 10;\nconsole.log(used);";
+        let dead = find_dead_stores(source, "javascript");
+        assert!(dead.iter().any(|d| d.variable == "unused"));
+        assert!(!dead.iter().any(|d| d.variable == "used"));
+    }
+
+    #[test]
+    fn dead_store_reassigned_multiple_times() {
+        let source = "\
+let x = 1;
+x = 2;
+x = 3;
+console.log(x);";
+        let dead = find_dead_stores(source, "javascript");
+        // First two assignments are dead (overwritten before read)
+        let dead_x: Vec<_> = dead.iter().filter(|d| d.variable == "x").collect();
+        assert!(
+            dead_x.len() >= 2,
+            "first two assignments should be dead: {:?}",
+            dead_x
+        );
+    }
+
+    #[test]
+    fn dead_store_no_dead_when_all_used() {
+        let source = "\
+let x = computeA();
+processA(x);
+let y = computeB();
+processB(y);";
+        let dead = find_dead_stores(source, "javascript");
+        // Neither x nor y is dead
+        assert!(!dead.iter().any(|d| d.variable == "x"), "x is used");
+        assert!(!dead.iter().any(|d| d.variable == "y"), "y is used");
+    }
+
+    #[test]
+    fn dead_store_python() {
+        let source = "\
+result = compute()
+result = recompute()
+output(result)";
+        let dead = find_dead_stores(source, "python");
+        // First assignment is dead
+        assert!(dead.iter().any(|d| d.variable == "result" && d.line == 1));
+    }
+
+    #[test]
+    fn dead_store_rust() {
+        let source = "\
+let mut buf = Vec::new();
+buf = Vec::with_capacity(10);
+buf.push(42);";
+        let dead = find_dead_stores(source, "rust");
+        assert!(dead.iter().any(|d| d.variable == "buf" && d.line == 1));
+    }
+
+    // -- uninitialized uses -----------------------------------------------
+
+    #[test]
+    fn uninitialized_use_never_defined() {
+        let source = "console.log(mystery);";
+        let uninit = find_uninitialized_uses(source, "javascript");
+        assert!(
+            uninit.iter().any(|l| l.line == 1),
+            "mystery is never defined: {:?}",
+            uninit
+        );
+    }
+
+    #[test]
+    fn uninitialized_no_false_positive_for_param_like() {
+        // Uppercase identifiers are not flagged
+        let source = "console.log(Math.PI);";
+        let uninit = find_uninitialized_uses(source, "javascript");
+        // "Math" starts with uppercase, should not be flagged
+        assert!(!uninit.iter().any(|l| l.line == 1 && l.column == 12));
+    }
+
+    #[test]
+    fn uninitialized_use_python() {
+        let source = "\
+result = process(data)
+data = load_data()";
+        let uninit = find_uninitialized_uses(source, "python");
+        // data is used on line 1 before defined on line 2
+        assert!(
+            uninit.iter().any(|l| l.line == 1),
+            "data used before def: {:?}",
+            uninit
+        );
+    }
+
+    // -- reaching defs: patterns ------------------------------------------
+
+    #[test]
+    fn reaching_defs_multiple_variables() {
+        let source = "\
+let a = 1;
+let b = 2;
+let c = 3;
+let result = a + b + c;";
+        let reaching = find_reaching_defs(source, "javascript", 4);
+        assert!(reaching.iter().any(|c| c.variable == "a"));
+        assert!(reaching.iter().any(|c| c.variable == "b"));
+        assert!(reaching.iter().any(|c| c.variable == "c"));
+    }
+
+    #[test]
+    fn reaching_defs_empty_source() {
+        let reaching = find_reaching_defs("", "javascript", 1);
+        assert!(reaching.is_empty());
+    }
+
+    #[test]
+    fn reaching_defs_no_match_at_target() {
+        let source = "\
+let x = 10;
+let y = 20;";
+        // Target line 10 — no uses near line 10
+        let reaching = find_reaching_defs(source, "javascript", 10);
+        assert!(reaching.is_empty());
+    }
+
+    // -- empty source code ------------------------------------------------
+
+    #[test]
+    fn def_use_chains_empty_source() {
+        let chains = find_def_use_chains("", "javascript");
+        assert!(chains.is_empty());
+    }
+
+    #[test]
+    fn dead_stores_empty_source() {
+        let dead = find_dead_stores("", "javascript");
+        assert!(dead.is_empty());
+    }
+
+    #[test]
+    fn uninitialized_uses_empty_source() {
+        let uninit = find_uninitialized_uses("", "javascript");
+        assert!(uninit.is_empty());
+    }
+
+    // -- comment lines are skipped ----------------------------------------
+
+    #[test]
+    fn def_use_chains_skip_comments() {
+        let source = "\
+// let commented = 42;
+let real = 10;
+console.log(real);";
+        let chains = find_def_use_chains(source, "javascript");
+        assert!(!chains.iter().any(|c| c.variable == "commented"));
+        assert!(chains.iter().any(|c| c.variable == "real"));
+    }
+
+    #[test]
+    fn def_use_chains_skip_python_comments() {
+        let source = "\
+# count = old_value
+count = 10
+print(count)";
+        let chains = find_def_use_chains(source, "python");
+        // The comment line should not create a definition
+        let count_chain = chains.iter().find(|c| c.variable == "count");
+        assert!(count_chain.is_some());
+        assert_eq!(count_chain.unwrap().definitions[0].line, 2);
+    }
+
+    // -- patterns_for language coverage -----------------------------------
+
+    #[test]
+    fn patterns_for_unknown_language() {
+        let source = "let x = 1;\nconsole.log(x);";
+        let chains = find_def_use_chains(source, "brainfuck");
+        // Should fall back to default patterns (let/var/const)
+        assert!(chains.iter().any(|c| c.variable == "x"));
+    }
+
+    #[test]
+    fn patterns_for_java() {
+        let source = "var count = 0;\nSystem.out.println(count);";
+        let chains = find_def_use_chains(source, "java");
+        assert!(chains.iter().any(|c| c.variable == "count"));
+    }
+
+    #[test]
+    fn patterns_for_kotlin() {
+        let source = "val name = \"test\"\nprintln(name)";
+        let chains = find_def_use_chains(source, "kotlin");
+        assert!(chains.iter().any(|c| c.variable == "name"));
+    }
+
+    // -- extract_assignment edge cases ------------------------------------
+
+    #[test]
+    fn extract_assignment_comparison_not_matched() {
+        let patterns = patterns_for("javascript");
+        // == should not be treated as assignment
+        assert!(extract_assignment("if (x == 5)", &patterns).is_none());
+    }
+
+    #[test]
+    fn extract_assignment_not_equals_not_matched() {
+        let patterns = patterns_for("javascript");
+        assert!(extract_assignment("if (x != 5)", &patterns).is_none());
+    }
+
+    #[test]
+    fn extract_assignment_plus_equals_not_matched() {
+        let patterns = patterns_for("javascript");
+        assert!(extract_assignment("count += 1", &patterns).is_none());
+    }
+
+    // -- is_keyword covers common keywords --------------------------------
+
+    #[test]
+    fn is_keyword_covers_basics() {
+        assert!(is_keyword("if"));
+        assert!(is_keyword("for"));
+        assert!(is_keyword("while"));
+        assert!(is_keyword("return"));
+        assert!(is_keyword("function"));
+        assert!(is_keyword("class"));
+        assert!(is_keyword("import"));
+        assert!(!is_keyword("myVariable"));
+        assert!(!is_keyword("doWork"));
+    }
+
+    // -- dead stores: sorted by line --------------------------------------
+
+    #[test]
+    fn dead_stores_sorted_by_line() {
+        let source = "\
+let z = 30;
+let a = 10;
+let m = 20;";
+        let dead = find_dead_stores(source, "javascript");
+        for i in 1..dead.len() {
+            assert!(
+                dead[i].line >= dead[i - 1].line,
+                "dead stores should be sorted by line"
+            );
+        }
+    }
+
+    // -- def_use chains: sorted by variable name --------------------------
+
+    #[test]
+    fn def_use_chains_sorted_by_variable() {
+        let source = "\
+let zebra = 1;
+let alpha = 2;
+let middle = 3;";
+        let chains = find_def_use_chains(source, "javascript");
+        for i in 1..chains.len() {
+            assert!(
+                chains[i].variable >= chains[i - 1].variable,
+                "chains should be sorted by variable name"
+            );
+        }
     }
 }

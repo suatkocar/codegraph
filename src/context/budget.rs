@@ -242,4 +242,164 @@ mod tests {
     fn compact_multiline_single_line() {
         assert_eq!(compact_multiline("already compact"), "already compact");
     }
+
+    // =====================================================================
+    // NEW TESTS: Phase 18C — Budget comprehensive coverage
+    // =====================================================================
+
+    // -- estimate_tokens edge cases ---------------------------------------
+
+    #[test]
+    fn estimate_tokens_one_char() {
+        assert_eq!(estimate_tokens("x"), 1);
+    }
+
+    #[test]
+    fn estimate_tokens_four_chars() {
+        assert_eq!(estimate_tokens("abcd"), 1);
+    }
+
+    #[test]
+    fn estimate_tokens_five_chars() {
+        assert_eq!(estimate_tokens("abcde"), 2);
+    }
+
+    #[test]
+    fn estimate_tokens_eight_chars() {
+        assert_eq!(estimate_tokens("abcdefgh"), 2);
+    }
+
+    #[test]
+    fn estimate_tokens_unicode() {
+        let text = "hello world!"; // 12 chars -> ceil(12/4) = 3
+        assert_eq!(estimate_tokens(text), 3);
+    }
+
+    #[test]
+    fn estimate_tokens_code_snippet() {
+        let code = "fn main() {\n    println!(\"Hello, world!\");\n}";
+        let tokens = estimate_tokens(code);
+        assert!(tokens > 0);
+        assert_eq!(tokens, code.len().div_ceil(4));
+    }
+
+    // -- truncate_to_fit edge cases ---------------------------------------
+
+    #[test]
+    fn truncate_single_line_within_budget() {
+        let text = "short";
+        let result = truncate_to_fit(text, 10);
+        assert_eq!(result, "short");
+    }
+
+    #[test]
+    fn truncate_exact_budget() {
+        let text = "abcd"; // 1 token
+        let result = truncate_to_fit(text, 1);
+        assert_eq!(result, "abcd");
+    }
+
+    #[test]
+    fn truncate_multiple_lines_budget_for_two() {
+        let text = "abcdefgh\nabcdefgh\nabcdefgh\nabcdefgh";
+        // Each line: ceil(8/4)=2 tokens + 1 newline = 3 per line; total ~12 tokens
+        // Budget of 5 allows first line (3 tokens) but not second (6 > 5)
+        let result = truncate_to_fit(text, 5);
+        assert!(result.lines().count() < text.lines().count());
+    }
+
+    #[test]
+    fn truncate_preserves_content() {
+        let text = "line one\nline two\nline three";
+        let result = truncate_to_fit(text, 6);
+        for line in result.lines() {
+            assert!(text.contains(line));
+        }
+    }
+
+    #[test]
+    fn truncate_empty_string() {
+        assert_eq!(truncate_to_fit("", 10), "");
+    }
+
+    #[test]
+    fn truncate_large_budget() {
+        let text = "line1\nline2\nline3";
+        let result = truncate_to_fit(text, 1000);
+        assert_eq!(result, text);
+    }
+
+    // -- signature_only edge cases ----------------------------------------
+
+    #[test]
+    fn signature_rust_function() {
+        let body =
+            "pub fn process(data: &[u8]) -> Result<String, Error> {\n    Ok(String::new())\n}";
+        let sig = signature_only(body);
+        assert_eq!(sig, "pub fn process(data: &[u8]) -> Result<String, Error>");
+    }
+
+    #[test]
+    fn signature_python_def() {
+        // Python doesn't use braces, so signature extraction falls back
+        let body = "def compute(x, y):\n    return x + y";
+        let sig = signature_only(body);
+        assert_eq!(sig, "def compute(x, y):");
+    }
+
+    #[test]
+    fn signature_class_with_generics() {
+        let body = "class Container<T> implements Iterable<T> {\n  items: T[] = [];\n}";
+        let sig = signature_only(body);
+        assert!(sig.contains("Container"));
+        assert!(!sig.contains("items"));
+    }
+
+    #[test]
+    fn signature_only_brace_body() {
+        let body = "{\n  return 42;\n}";
+        // Nothing before the brace, should fall back
+        let sig = signature_only(body);
+        assert!(!sig.is_empty());
+    }
+
+    #[test]
+    fn signature_arrow_no_brace() {
+        let body = "const fn = (x) => x * 2";
+        let sig = signature_only(body);
+        assert!(sig.contains("=>"));
+    }
+
+    #[test]
+    fn signature_whitespace_only() {
+        let sig = signature_only("   ");
+        assert_eq!(sig, "");
+    }
+
+    // -- compact_multiline edge cases -------------------------------------
+
+    #[test]
+    fn compact_multiline_tabs_and_spaces() {
+        assert_eq!(compact_multiline("\t  hello\t\n\t  world\t"), "hello world");
+    }
+
+    #[test]
+    fn compact_multiline_empty() {
+        assert_eq!(compact_multiline(""), "");
+    }
+
+    #[test]
+    fn compact_multiline_whitespace_only() {
+        assert_eq!(compact_multiline("   \n   \n   "), "");
+    }
+
+    #[test]
+    fn compact_multiline_preserves_words() {
+        let input = "function  greet(\n  name: string,\n  age: number\n)";
+        let result = compact_multiline(input);
+        assert!(result.contains("function"));
+        assert!(result.contains("greet("));
+        assert!(result.contains("name: string,"));
+        assert!(result.contains("age: number"));
+    }
 }

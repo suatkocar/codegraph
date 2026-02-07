@@ -400,4 +400,438 @@ mod tests {
             );
         }
     }
+
+    // -- Additional schema tests (Phase 18D) ----------------------------------
+
+    #[test]
+    fn edges_table_has_expected_columns() {
+        let conn = setup();
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(edges)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for col in &["id", "source_id", "target_id", "type", "properties"] {
+            assert!(
+                columns.contains(&col.to_string()),
+                "edges table should have column '{col}', found: {columns:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn file_hashes_table_has_expected_columns() {
+        let conn = setup();
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(file_hashes)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for col in &["file_path", "content_hash", "language", "indexed_at"] {
+            assert!(
+                columns.contains(&col.to_string()),
+                "file_hashes table should have column '{col}', found: {columns:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn embedding_cache_table_has_expected_columns() {
+        let conn = setup();
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(embedding_cache)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for col in &["node_id", "embedding", "model_version"] {
+            assert!(
+                columns.contains(&col.to_string()),
+                "embedding_cache table should have column '{col}', found: {columns:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unresolved_refs_table_has_expected_columns() {
+        let conn = setup();
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(unresolved_refs)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for col in &[
+            "id",
+            "source_id",
+            "specifier",
+            "ref_type",
+            "file_path",
+            "line",
+        ] {
+            assert!(
+                columns.contains(&col.to_string()),
+                "unresolved_refs table should have column '{col}', found: {columns:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fts_search_works_with_qualified_name() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, qualified_name, file_path, start_line, end_line, language)
+             VALUES ('n1', 'method', 'findUser', 'UserService.findUser', 'src/service.ts', 10, 20, 'typescript')",
+            [],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fts_nodes WHERE fts_nodes MATCH 'UserService'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "FTS should match on qualified_name");
+    }
+
+    #[test]
+    fn fts_search_works_with_doc_comment() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language, doc_comment)
+             VALUES ('n1', 'function', 'process', 'src/app.ts', 1, 5, 'typescript', 'Processes incoming requests from the API gateway')",
+            [],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fts_nodes WHERE fts_nodes MATCH 'gateway'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "FTS should match on doc_comment");
+    }
+
+    #[test]
+    fn fts_triggers_fire_on_update() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language)
+             VALUES ('n1', 'function', 'oldName', 'src/app.ts', 1, 5, 'typescript')",
+            [],
+        )
+        .unwrap();
+
+        // Verify old name is in FTS
+        let count_old: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fts_nodes WHERE fts_nodes MATCH 'oldName'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count_old, 1);
+
+        // Update the name
+        conn.execute("UPDATE nodes SET name = 'newName' WHERE id = 'n1'", [])
+            .unwrap();
+
+        // Old name should be gone
+        let count_old_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fts_nodes WHERE fts_nodes MATCH 'oldName'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count_old_after, 0,
+            "Old name should be removed from FTS after update"
+        );
+
+        // New name should be present
+        let count_new: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fts_nodes WHERE fts_nodes MATCH 'newName'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count_new, 1, "New name should be in FTS after update");
+    }
+
+    #[test]
+    fn multiple_nodes_in_fts() {
+        let conn = setup();
+        for i in 0..10 {
+            conn.execute(
+                "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language)
+                 VALUES (?1, 'function', ?2, 'src/app.ts', ?3, ?4, 'typescript')",
+                rusqlite::params![format!("n{}", i), format!("function{}", i), i, i + 5],
+            )
+            .unwrap();
+        }
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fts_nodes WHERE fts_nodes MATCH 'function*'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 10,
+            "FTS should find all 10 functions with prefix match"
+        );
+    }
+
+    #[test]
+    fn schema_handles_null_optional_columns() {
+        let conn = setup();
+        // Insert with minimal columns (NULLs for optional)
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language)
+             VALUES ('n1', 'function', 'minimal', 'src/app.ts', 1, 5, 'typescript')",
+            [],
+        )
+        .unwrap();
+
+        let (qn, sig, doc, meta): (Option<String>, Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT qualified_name, signature, doc_comment, metadata FROM nodes WHERE id = 'n1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert!(qn.is_none());
+        assert!(sig.is_none());
+        assert!(doc.is_none());
+        assert!(meta.is_none());
+    }
+
+    #[test]
+    fn edges_autoincrement_id() {
+        let conn = setup();
+        // Insert a node first
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language)
+             VALUES ('n1', 'function', 'fn1', 'src/a.ts', 1, 5, 'typescript')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language)
+             VALUES ('n2', 'function', 'fn2', 'src/b.ts', 1, 5, 'typescript')",
+            [],
+        )
+        .unwrap();
+
+        // Insert edges
+        conn.execute(
+            "INSERT INTO edges (source_id, target_id, type) VALUES ('n1', 'n2', 'calls')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO edges (source_id, target_id, type) VALUES ('n2', 'n1', 'calls')",
+            [],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // IDs should be auto-incrementing
+        let ids: Vec<i64> = conn
+            .prepare("SELECT id FROM edges ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids[1] > ids[0], "Edge IDs should auto-increment");
+    }
+
+    #[test]
+    fn file_hashes_default_indexed_at() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO file_hashes (file_path, content_hash, language) VALUES ('src/app.ts', 'abc123', 'typescript')",
+            [],
+        )
+        .unwrap();
+
+        let indexed_at: i64 = conn
+            .query_row(
+                "SELECT indexed_at FROM file_hashes WHERE file_path = 'src/app.ts'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        // Should be a reasonable Unix timestamp (after 2020)
+        assert!(
+            indexed_at > 1577836800,
+            "indexed_at should be a valid timestamp, got {}",
+            indexed_at
+        );
+    }
+
+    #[test]
+    fn unresolved_refs_index_exists() {
+        let conn = setup();
+        assert!(
+            object_exists(&conn, "index", "idx_unresolved_file"),
+            "unresolved_refs file index should exist"
+        );
+    }
+
+    #[test]
+    fn insert_and_query_unresolved_ref() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO unresolved_refs (source_id, specifier, ref_type, file_path, line) \
+             VALUES ('n1', './missing', 'import', 'src/app.ts', 3)",
+            [],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM unresolved_refs WHERE file_path = 'src/app.ts'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn embedding_cache_model_version_default() {
+        let conn = setup();
+        // Need a node for the FK
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language)
+             VALUES ('n1', 'function', 'fn1', 'src/a.ts', 1, 5, 'typescript')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO embedding_cache (node_id, embedding) VALUES ('n1', X'00')",
+            [],
+        )
+        .unwrap();
+
+        let version: String = conn
+            .query_row(
+                "SELECT model_version FROM embedding_cache WHERE node_id = 'n1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            version, "jina-embeddings-v2-base-code",
+            "Default model version should be jina-embeddings-v2-base-code"
+        );
+    }
+
+    #[test]
+    fn node_default_column_values() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language)
+             VALUES ('n1', 'function', 'fn1', 'src/a.ts', 1, 5, 'typescript')",
+            [],
+        )
+        .unwrap();
+
+        let (start_col, end_col): (i64, i64) = conn
+            .query_row(
+                "SELECT start_column, end_column FROM nodes WHERE id = 'n1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(start_col, 0, "start_column default should be 0");
+        assert_eq!(end_col, 0, "end_column default should be 0");
+    }
+
+    #[test]
+    fn nodes_primary_key_prevents_duplicates() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language)
+             VALUES ('n1', 'function', 'fn1', 'src/a.ts', 1, 5, 'typescript')",
+            [],
+        )
+        .unwrap();
+
+        // Inserting with same ID should fail (without ON CONFLICT)
+        let result = conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language)
+             VALUES ('n1', 'class', 'different', 'src/b.ts', 10, 20, 'typescript')",
+            [],
+        );
+        assert!(result.is_err(), "Duplicate primary key should fail");
+    }
+
+    #[test]
+    fn file_hashes_primary_key_prevents_duplicates() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO file_hashes (file_path, content_hash, language)
+             VALUES ('src/a.ts', 'hash1', 'typescript')",
+            [],
+        )
+        .unwrap();
+
+        let result = conn.execute(
+            "INSERT INTO file_hashes (file_path, content_hash, language)
+             VALUES ('src/a.ts', 'hash2', 'typescript')",
+            [],
+        );
+        assert!(result.is_err(), "Duplicate file_path should fail");
+    }
+
+    #[test]
+    fn create_vec_table_is_idempotent() {
+        let conn = setup();
+        // Call create_vec_table again — should not error
+        create_vec_table(&conn);
+        assert!(
+            object_exists(&conn, "table", "vec_embeddings"),
+            "vec_embeddings should still exist after double create"
+        );
+    }
+
+    #[test]
+    fn all_table_count() {
+        let conn = setup();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'fts_nodes_%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        // nodes, edges, file_hashes, embedding_cache, unresolved_refs, fts_nodes, vec_embeddings
+        assert!(count >= 7, "Should have at least 7 tables, got {}", count);
+    }
 }

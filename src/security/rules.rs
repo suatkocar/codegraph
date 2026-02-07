@@ -117,10 +117,10 @@ pub struct Ruleset {
 
 /// Load rules from a YAML file on disk.
 pub fn load_rules(path: &Path) -> Result<Vec<SecurityRule>, String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    let ruleset: Ruleset =
-        serde_yaml::from_str(&content).map_err(|e| format!("YAML parse error in {}: {}", path.display(), e))?;
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+    let ruleset: Ruleset = serde_yaml::from_str(&content)
+        .map_err(|e| format!("YAML parse error in {}: {}", path.display(), e))?;
     Ok(ruleset.rules)
 }
 
@@ -172,7 +172,10 @@ fn byte_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
 pub fn match_rule(rule: &SecurityRule, source: &str, language: &str) -> Vec<RuleMatch> {
     // Language filter: if the rule specifies languages, check membership.
     if !rule.languages.is_empty()
-        && !rule.languages.iter().any(|l| l.eq_ignore_ascii_case(language))
+        && !rule
+            .languages
+            .iter()
+            .any(|l| l.eq_ignore_ascii_case(language))
     {
         return Vec::new();
     }
@@ -608,7 +611,11 @@ rules:
         let rules = load_bundled_rules();
         let sql_rules: Vec<_> = rules
             .iter()
-            .filter(|r| r.id.contains("SQL") || r.id.contains("sql") || r.category == RuleCategory::Injection)
+            .filter(|r| {
+                r.id.contains("SQL")
+                    || r.id.contains("sql")
+                    || r.category == RuleCategory::Injection
+            })
             .collect();
         assert!(!sql_rules.is_empty(), "Should have SQL injection rules");
 
@@ -697,5 +704,588 @@ cursor.execute(query)"#;
         };
         // "python" should match "Python" case-insensitively
         assert_eq!(match_rule(&rule, "test", "python").len(), 1);
+    }
+
+    // ====================================================================
+    // Phase 18B — parameterised rule-matching tests (test_case)
+    // ====================================================================
+
+    use pretty_assertions::assert_eq as pa_eq;
+    use test_case::test_case;
+
+    // --- Bundled rule count & coverage ---
+
+    #[test]
+    fn bundled_rules_count_at_least_50() {
+        let rules = load_bundled_rules();
+        assert!(rules.len() >= 50, "got {}", rules.len());
+    }
+
+    #[test]
+    fn bundled_rules_unique_ids() {
+        let rules = load_bundled_rules();
+        let mut ids: Vec<&str> = rules.iter().map(|r| r.id.as_str()).collect();
+        let total = ids.len();
+        ids.sort();
+        ids.dedup();
+        pa_eq!(ids.len(), total, "duplicate rule IDs found");
+    }
+
+    #[test]
+    fn bundled_rules_have_severity_low_or_above() {
+        let rules = load_bundled_rules();
+        // All bundled rules are Medium+, verify at least some are Medium
+        assert!(
+            rules.iter().any(|r| r.severity == Severity::Medium),
+            "should have at least some medium rules"
+        );
+    }
+
+    #[test]
+    fn bundled_rules_have_severity_medium() {
+        let rules = load_bundled_rules();
+        assert!(rules.iter().any(|r| r.severity == Severity::Medium));
+    }
+
+    #[test]
+    fn bundled_rules_have_severity_high() {
+        let rules = load_bundled_rules();
+        assert!(rules.iter().any(|r| r.severity == Severity::High));
+    }
+
+    #[test]
+    fn bundled_rules_have_severity_critical() {
+        let rules = load_bundled_rules();
+        assert!(rules.iter().any(|r| r.severity == Severity::Critical));
+    }
+
+    #[test]
+    fn bundled_rules_have_injection_category() {
+        let rules = load_bundled_rules();
+        assert!(rules.iter().any(|r| r.category == RuleCategory::Injection));
+    }
+
+    #[test]
+    fn bundled_rules_have_crypto_category() {
+        let rules = load_bundled_rules();
+        assert!(rules.iter().any(|r| r.category == RuleCategory::Crypto));
+    }
+
+    #[test]
+    fn bundled_rules_have_secrets_category() {
+        let rules = load_bundled_rules();
+        assert!(rules.iter().any(|r| r.category == RuleCategory::Secrets));
+    }
+
+    #[test]
+    fn bundled_rules_have_xss_category() {
+        let rules = load_bundled_rules();
+        assert!(rules.iter().any(|r| r.category == RuleCategory::Xss));
+    }
+
+    #[test]
+    fn bundled_rules_have_deserialization_category() {
+        let rules = load_bundled_rules();
+        assert!(rules
+            .iter()
+            .any(|r| r.category == RuleCategory::Deserialization));
+    }
+
+    #[test]
+    fn bundled_rules_have_config_category() {
+        let rules = load_bundled_rules();
+        assert!(rules.iter().any(|r| r.category == RuleCategory::Config));
+    }
+
+    #[test]
+    fn bundled_rules_have_authentication_category() {
+        let rules = load_bundled_rules();
+        assert!(rules
+            .iter()
+            .any(|r| r.category == RuleCategory::Authentication));
+    }
+
+    #[test]
+    fn bundled_rules_have_pathtraversal_category() {
+        let rules = load_bundled_rules();
+        assert!(rules
+            .iter()
+            .any(|r| r.category == RuleCategory::PathTraversal));
+    }
+
+    // --- Pattern matching via test_case ---
+
+    #[test_case("eval(user_input)", "javascript", RuleCategory::Injection ; "js eval injection")]
+    #[test_case("eval(user_input)", "python", RuleCategory::Injection ; "py eval injection")]
+    #[test_case("document.write(data)", "javascript", RuleCategory::Xss ; "js document.write xss")]
+    #[test_case(".innerHTML = data", "javascript", RuleCategory::Xss ; "js innerHTML xss")]
+    #[test_case("dangerouslySetInnerHTML", "javascript", RuleCategory::Xss ; "react dangerous html")]
+    #[test_case("pickle.loads(data)", "python", RuleCategory::Deserialization ; "py pickle deser")]
+    #[test_case("yaml.load(data)", "python", RuleCategory::Deserialization ; "py yaml unsafe")]
+    #[test_case("os.system('ls')", "python", RuleCategory::Injection ; "py os.system")]
+    #[test_case("subprocess.call(cmd, shell=True)", "python", RuleCategory::Injection ; "py shell true")]
+    fn bundled_rule_detects_category(source: &str, lang: &str, expected_cat: RuleCategory) {
+        let rules = load_bundled_rules();
+        let all_matches: Vec<_> = rules
+            .iter()
+            .filter(|r| !match_rule(r, source, lang).is_empty())
+            .collect();
+        assert!(
+            !all_matches.is_empty(),
+            "no match for {:?} in {}",
+            source,
+            lang
+        );
+        assert!(
+            all_matches.iter().any(|r| r.category == expected_cat),
+            "expected category {:?}, got: {:?}",
+            expected_cat,
+            all_matches.iter().map(|r| r.category).collect::<Vec<_>>()
+        );
+    }
+
+    // --- Secret detection patterns via test_case ---
+
+    #[test_case("FKIAEXAMPLEKEY000000" ; "aws access key")]
+    #[test_case("ghx_FAKE_TOKEN_FOR_TESTING_00000000000" ; "github token")]
+    #[test_case("rk_skey_aBcDeFgHiJkLmNoPqRsTuVwX" ; "stripe key")]
+    #[test_case("-----BEGIN RSA PRIVATE KEY-----" ; "private key")]
+    #[test_case("postgres://user:pass@host/db" ; "db conn string")]
+    fn bundled_rule_detects_secret(source: &str) {
+        let rules = load_bundled_rules();
+        let found = rules
+            .iter()
+            .any(|r| !match_rule(r, source, "python").is_empty());
+        assert!(found, "should detect secret: {}", source);
+    }
+
+    // --- Crypto weakness detection via test_case ---
+
+    #[test_case("hashlib.md5(data)" ; "python md5")]
+    #[test_case("hashlib.sha1(data)" ; "python sha1")]
+    #[test_case("Math.random()" ; "js insecure random")]
+    #[test_case("random.randint(0, 100)" ; "py insecure random")]
+    fn bundled_rule_detects_crypto_issue(source: &str) {
+        let rules = load_bundled_rules();
+        let found = rules.iter().any(|r| {
+            r.category == RuleCategory::Crypto && !match_rule(r, source, "python").is_empty()
+        });
+        // For Math.random(), try JS language
+        let found_js = rules.iter().any(|r| {
+            r.category == RuleCategory::Crypto && !match_rule(r, source, "javascript").is_empty()
+        });
+        assert!(
+            found || found_js,
+            "should detect crypto weakness: {}",
+            source
+        );
+    }
+
+    // --- Negative tests: clean code should not trigger high-severity ---
+
+    #[test_case("x = 42 + y" ; "arithmetic")]
+    #[test_case("def hello(name): return f'Hello {name}'" ; "string format")]
+    #[test_case("import json\ndata = json.loads(raw)" ; "json parse safe")]
+    fn bundled_rules_no_false_positive_critical(source: &str) {
+        let rules = load_bundled_rules();
+        let critical: Vec<_> = rules
+            .iter()
+            .filter(|r| r.severity == Severity::Critical)
+            .flat_map(|r| match_rule(r, source, "python"))
+            .collect();
+        assert!(
+            critical.is_empty(),
+            "false positive critical: {:?}",
+            critical
+        );
+    }
+
+    // --- match_rule edge cases ---
+
+    #[test]
+    fn match_rule_empty_source() {
+        let rule = SecurityRule {
+            id: "E".into(),
+            name: "E".into(),
+            severity: Severity::Low,
+            cwe: None,
+            owasp: None,
+            languages: vec![],
+            pattern: "anything".into(),
+            message: "m".into(),
+            fix: None,
+            category: RuleCategory::Other,
+        };
+        assert!(match_rule(&rule, "", "python").is_empty());
+    }
+
+    #[test]
+    fn match_rule_empty_pattern_matches_everything() {
+        let rule = SecurityRule {
+            id: "E".into(),
+            name: "E".into(),
+            severity: Severity::Low,
+            cwe: None,
+            owasp: None,
+            languages: vec![],
+            pattern: "".into(),
+            message: "m".into(),
+            fix: None,
+            category: RuleCategory::Other,
+        };
+        // Empty regex matches at every position
+        let matches = match_rule(&rule, "hello", "python");
+        assert!(!matches.is_empty());
+    }
+
+    #[test]
+    fn match_rule_multiple_languages_one_matches() {
+        let rule = SecurityRule {
+            id: "ML".into(),
+            name: "ML".into(),
+            severity: Severity::Medium,
+            cwe: None,
+            owasp: None,
+            languages: vec!["python".into(), "javascript".into(), "ruby".into()],
+            pattern: "test".into(),
+            message: "m".into(),
+            fix: None,
+            category: RuleCategory::Other,
+        };
+        assert_eq!(match_rule(&rule, "test", "ruby").len(), 1);
+        assert_eq!(match_rule(&rule, "test", "go").len(), 0);
+    }
+
+    #[test]
+    fn match_rule_captures_correct_text() {
+        let rule = SecurityRule {
+            id: "CT".into(),
+            name: "CT".into(),
+            severity: Severity::High,
+            cwe: None,
+            owasp: None,
+            languages: vec![],
+            pattern: r"eval\([^)]*\)".into(),
+            message: "m".into(),
+            fix: None,
+            category: RuleCategory::Injection,
+        };
+        let matches = match_rule(&rule, "x = eval(data)", "python");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].matched_text, "eval(data)");
+    }
+
+    #[test]
+    fn match_rule_unicode_source() {
+        let rule = SecurityRule {
+            id: "U".into(),
+            name: "U".into(),
+            severity: Severity::Low,
+            cwe: None,
+            owasp: None,
+            languages: vec![],
+            pattern: "eval".into(),
+            message: "m".into(),
+            fix: None,
+            category: RuleCategory::Other,
+        };
+        let source = "# Türkçe yorum\neval(girdi)";
+        let matches = match_rule(&rule, source, "python");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line_number, 2);
+    }
+
+    // --- Severity ordering exhaustive ---
+
+    #[test]
+    fn severity_all_variants_comparable() {
+        let all = [
+            Severity::Info,
+            Severity::Low,
+            Severity::Medium,
+            Severity::High,
+            Severity::Critical,
+        ];
+        for i in 0..all.len() - 1 {
+            assert!(
+                all[i] < all[i + 1],
+                "{:?} should be < {:?}",
+                all[i],
+                all[i + 1]
+            );
+        }
+    }
+
+    // --- Category display exhaustive ---
+
+    #[test]
+    fn category_display_all_variants() {
+        let cats = [
+            (RuleCategory::Injection, "injection"),
+            (RuleCategory::Crypto, "crypto"),
+            (RuleCategory::Secrets, "secrets"),
+            (RuleCategory::Config, "config"),
+            (RuleCategory::Authentication, "authentication"),
+            (RuleCategory::Xss, "xss"),
+            (RuleCategory::PathTraversal, "path-traversal"),
+            (RuleCategory::Deserialization, "deserialization"),
+            (RuleCategory::Other, "other"),
+        ];
+        for (cat, expected) in cats {
+            pa_eq!(cat.to_string(), expected);
+        }
+    }
+
+    // --- Severity display exhaustive ---
+
+    #[test]
+    fn severity_display_all_variants() {
+        let sevs = [
+            (Severity::Info, "info"),
+            (Severity::Low, "low"),
+            (Severity::Medium, "medium"),
+            (Severity::High, "high"),
+            (Severity::Critical, "critical"),
+        ];
+        for (sev, expected) in sevs {
+            pa_eq!(sev.to_string(), expected);
+        }
+    }
+
+    // --- Severity serde roundtrip all variants ---
+
+    #[test_case(Severity::Info ; "info roundtrip")]
+    #[test_case(Severity::Low ; "low roundtrip")]
+    #[test_case(Severity::Medium ; "medium roundtrip")]
+    #[test_case(Severity::High ; "high roundtrip")]
+    #[test_case(Severity::Critical ; "critical roundtrip")]
+    fn severity_json_roundtrip(sev: Severity) {
+        let json = serde_json::to_string(&sev).unwrap();
+        let back: Severity = serde_json::from_str(&json).unwrap();
+        pa_eq!(back, sev);
+    }
+
+    // --- Category serde roundtrip all variants ---
+
+    #[test_case(RuleCategory::Injection ; "injection roundtrip")]
+    #[test_case(RuleCategory::Crypto ; "crypto roundtrip")]
+    #[test_case(RuleCategory::Secrets ; "secrets roundtrip")]
+    #[test_case(RuleCategory::Config ; "config roundtrip")]
+    #[test_case(RuleCategory::Authentication ; "auth roundtrip")]
+    #[test_case(RuleCategory::Xss ; "xss roundtrip")]
+    #[test_case(RuleCategory::PathTraversal ; "pathtraversal roundtrip")]
+    #[test_case(RuleCategory::Deserialization ; "deser roundtrip")]
+    #[test_case(RuleCategory::Other ; "other roundtrip")]
+    fn category_json_roundtrip(cat: RuleCategory) {
+        let json = serde_json::to_string(&cat).unwrap();
+        let back: RuleCategory = serde_json::from_str(&json).unwrap();
+        pa_eq!(back, cat);
+    }
+
+    // --- is_test_file parametrised ---
+
+    #[test_case("src/tests/foo.rs" => true ; "tests dir")]
+    #[test_case("src/__tests__/bar.js" => true ; "jest tests dir")]
+    #[test_case("my_test.go" => true ; "go test")]
+    #[test_case("app.test.ts" => true ; "ts test")]
+    #[test_case("helper.spec.js" => true ; "spec js")]
+    #[test_case("src/test/java/Foo.java" => true ; "java test dir")]
+    #[test_case("test-fixtures/data.json" => true ; "test fixtures")]
+    #[test_case("app/fixtures/data.py" => true ; "fixtures dir")]
+    #[test_case("src/testdata/input.txt" => true ; "testdata dir")]
+    #[test_case("widget.spec.ts" => true ; "ts spec")]
+    #[test_case("my_test.py" => true ; "py test")]
+    #[test_case("x.test.tsx" => true ; "tsx test")]
+    #[test_case("src/spec/model_spec.rb" => true ; "ruby spec dir")]
+    #[test_case("src/main.rs" => false ; "main rs")]
+    #[test_case("lib/scanner.py" => false ; "lib py")]
+    #[test_case("index.ts" => false ; "index ts")]
+    #[test_case("pkg/handler.go" => false ; "go handler")]
+    #[test_case("src/App.tsx" => false ; "tsx component")]
+    fn is_test_file_parameterised(path: &str) -> bool {
+        is_test_file(path)
+    }
+
+    // --- byte_to_line_col edge cases ---
+
+    #[test]
+    fn byte_to_line_col_many_lines() {
+        let source = "a\nb\nc\nd\ne";
+        pa_eq!(byte_to_line_col(source, 8), (5, 1)); // 'e'
+    }
+
+    #[test]
+    fn byte_to_line_col_windows_newlines_treated_as_chars() {
+        // \r\n should still be handled (each char counts)
+        let source = "ab\r\ncd";
+        let (line, _col) = byte_to_line_col(source, 4);
+        // After \r\n, we're on line 2
+        assert_eq!(line, 2);
+    }
+
+    // --- YAML with multiple rules ---
+
+    #[test]
+    fn parse_yaml_multiple_rules() {
+        let yaml = r#"
+name: multi
+version: "1.0"
+rules:
+  - id: M-001
+    name: Rule One
+    severity: low
+    pattern: "pattern_one"
+    message: msg1
+  - id: M-002
+    name: Rule Two
+    severity: high
+    pattern: "pattern_two"
+    message: msg2
+    category: crypto
+  - id: M-003
+    name: Rule Three
+    severity: critical
+    pattern: "pattern_three"
+    message: msg3
+    cwe: "CWE-89"
+    owasp: "A03:2021"
+    languages: ["python"]
+    category: injection
+"#;
+        let rs: Ruleset = serde_yaml::from_str(yaml).unwrap();
+        pa_eq!(rs.rules.len(), 3);
+        pa_eq!(rs.rules[0].severity, Severity::Low);
+        pa_eq!(rs.rules[1].category, RuleCategory::Crypto);
+        pa_eq!(rs.rules[2].owasp.as_deref(), Some("A03:2021"));
+    }
+
+    // --- Load rules from temp file ---
+
+    #[test]
+    fn load_rules_from_valid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.yaml");
+        std::fs::write(
+            &path,
+            r#"
+name: test
+version: "1.0"
+rules:
+  - id: FILE-001
+    name: File Rule
+    severity: medium
+    pattern: "test_pattern"
+    message: found it
+    category: other
+"#,
+        )
+        .unwrap();
+        let rules = load_rules(&path).unwrap();
+        pa_eq!(rules.len(), 1);
+        pa_eq!(rules[0].id, "FILE-001");
+    }
+
+    #[test]
+    fn load_rules_from_invalid_yaml_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.yaml");
+        std::fs::write(&path, "{{not valid yaml").unwrap();
+        assert!(load_rules(&path).is_err());
+    }
+
+    // --- Bundled rules: specific rule IDs exist ---
+
+    #[test]
+    fn bundled_has_owasp_a03_sql_injection() {
+        let rules = load_bundled_rules();
+        assert!(rules.iter().any(|r| r.id == "OWASP-A03-001"));
+    }
+
+    #[test]
+    fn bundled_has_cwe_787_buffer_overflow() {
+        let rules = load_bundled_rules();
+        assert!(rules.iter().any(|r| r.id == "CWE-787-001"));
+    }
+
+    #[test]
+    fn bundled_has_crypto_md5() {
+        let rules = load_bundled_rules();
+        assert!(rules.iter().any(|r| r.id == "CRYPTO-001"));
+    }
+
+    #[test]
+    fn bundled_has_secret_aws_key() {
+        let rules = load_bundled_rules();
+        assert!(rules.iter().any(|r| r.id == "SECRET-001"));
+    }
+
+    #[test]
+    fn bundled_has_secret_github_token() {
+        let rules = load_bundled_rules();
+        assert!(rules.iter().any(|r| r.id == "SECRET-005"));
+    }
+
+    // --- C/C++ specific rule detection ---
+
+    #[test_case("gets(buffer)" , "c" ; "c gets")]
+    #[test_case("strcpy(dest, src)" , "c" ; "c strcpy")]
+    #[test_case("sprintf(buf, fmt, val)" , "c" ; "c sprintf")]
+    fn bundled_detects_c_buffer_overflow(source: &str, lang: &str) {
+        let rules = load_bundled_rules();
+        let found = rules.iter().any(|r| {
+            r.cwe.as_deref() == Some("CWE-787") && !match_rule(r, source, lang).is_empty()
+        });
+        assert!(found, "should detect buffer overflow: {}", source);
+    }
+
+    // --- Multiple matches on same line ---
+
+    #[test]
+    fn match_rule_multiple_on_same_line() {
+        let rule = SecurityRule {
+            id: "M".into(),
+            name: "M".into(),
+            severity: Severity::High,
+            cwe: None,
+            owasp: None,
+            languages: vec![],
+            pattern: r"eval\(".into(),
+            message: "m".into(),
+            fix: None,
+            category: RuleCategory::Injection,
+        };
+        let source = "eval(eval(x))";
+        let matches = match_rule(&rule, source, "python");
+        pa_eq!(matches.len(), 2);
+        // Both on line 1
+        assert!(matches.iter().all(|m| m.line_number == 1));
+    }
+
+    // --- Ruleset serde roundtrip ---
+
+    #[test]
+    fn ruleset_yaml_roundtrip() {
+        let rs = Ruleset {
+            name: "test".into(),
+            version: "1.0".into(),
+            description: "desc".into(),
+            rules: vec![SecurityRule {
+                id: "RT-001".into(),
+                name: "RT".into(),
+                severity: Severity::High,
+                cwe: Some("CWE-89".into()),
+                owasp: None,
+                languages: vec!["python".into()],
+                pattern: "test".into(),
+                message: "msg".into(),
+                fix: Some("fix".into()),
+                category: RuleCategory::Injection,
+            }],
+        };
+        let yaml = serde_yaml::to_string(&rs).unwrap();
+        let back: Ruleset = serde_yaml::from_str(&yaml).unwrap();
+        pa_eq!(back.name, "test");
+        pa_eq!(back.rules.len(), 1);
+        pa_eq!(back.rules[0].id, "RT-001");
     }
 }

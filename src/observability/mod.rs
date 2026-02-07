@@ -17,8 +17,8 @@ use tracing_subscriber::EnvFilter;
 /// program startup — subsequent calls are silently ignored by
 /// `tracing_subscriber`.
 pub fn init_logging() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("codegraph=info"));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("codegraph=info"));
 
     // try_init so double-init in tests doesn't panic
     let _ = tracing_subscriber::fmt()
@@ -181,7 +181,9 @@ mod tests {
 
         let result = validate_path("src", tmp.path());
         assert!(result.is_ok());
-        assert!(result.unwrap().starts_with(tmp.path().canonicalize().unwrap()));
+        assert!(result
+            .unwrap()
+            .starts_with(tmp.path().canonicalize().unwrap()));
     }
 
     #[test]
@@ -287,7 +289,8 @@ mod tests {
 
     #[test]
     fn redact_connection_string() {
-        let input = "connection_string=Server=mydb.server.com;Database=prod;User=admin;Password=s3cr3t";
+        let input =
+            "connection_string=Server=mydb.server.com;Database=prod;User=admin;Password=s3cr3t";
         let output = redact_secrets(input);
         assert!(output.contains("***REDACTED***"));
     }
@@ -386,5 +389,294 @@ mod tests {
     fn metrics_cache_hit_rate_zero_total() {
         let m = Metrics::new();
         assert_eq!(m.cache_hit_rate(), 0.0);
+    }
+
+    // ====================================================================
+    // Phase 18B — extended observability tests
+    // ====================================================================
+
+    use pretty_assertions::assert_eq as pa_eq;
+    use test_case::test_case;
+
+    // --- validate_path extended ---
+
+    #[test]
+    fn validate_path_dot_dot_slash_attack() {
+        let tmp = TempDir::new().unwrap();
+        let result = validate_path("../../etc/passwd", tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_path_null_byte_in_path() {
+        let tmp = TempDir::new().unwrap();
+        let result = validate_path("file\0.txt", tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_path_tilde_attack() {
+        let tmp = TempDir::new().unwrap();
+        let result = validate_path("~/../../etc/passwd", tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_path_double_dot_encoded() {
+        let tmp = TempDir::new().unwrap();
+        // Even with ../ as normal text
+        let result = validate_path("subdir/../../../etc/passwd", tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_path_accepts_file_in_root() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "content").unwrap();
+        let result = validate_path("test.txt", tmp.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_path_accepts_deep_nested() {
+        let tmp = TempDir::new().unwrap();
+        let deep = tmp.path().join("a").join("b").join("c").join("d");
+        std::fs::create_dir_all(&deep).unwrap();
+        let result = validate_path("a/b/c/d", tmp.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_path_symlink_inside_root_ok() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("real");
+        std::fs::create_dir_all(&target).unwrap();
+        let link = tmp.path().join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        #[cfg(unix)]
+        {
+            let result = validate_path("link", tmp.path());
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn validate_path_empty_string() {
+        let tmp = TempDir::new().unwrap();
+        // Empty path = root itself, should be ok since it's within root
+        let result = validate_path("", tmp.path());
+        assert!(result.is_ok());
+    }
+
+    // --- redact_secrets extended ---
+
+    #[test_case("api_key=rk_skey_abcdefghij1234567890", "sk_live" ; "api key with sk_live")]
+    #[test_case("apikey=mySecretApiKeyThatIsLong2024", "mySecret" ; "apikey no separator")]
+    #[test_case("password=VeryLongSecurePassword123", "VeryLong" ; "password value")]
+    #[test_case("passwd=LongEnoughPassword!", "LongEnough" ; "passwd variant")]
+    #[test_case("pwd=LongPassword123", "LongPassword" ; "pwd variant")]
+    #[test_case("secret=ghp_aBcDeFgHiJkLmNoPqRsTuVw", "ghp_" ; "secret token")]
+    #[test_case("token=abcdefghijklmnopqrstuvwxyz123456789012", "abcdefghij" ; "generic token")]
+    fn redact_secrets_removes_value(input: &str, should_not_contain: &str) {
+        let output = redact_secrets(input);
+        assert!(
+            output.contains("***REDACTED***"),
+            "should redact: {}",
+            input
+        );
+        assert!(
+            !output.contains(should_not_contain),
+            "should not contain raw value in: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn redact_aws_access_key_pattern() {
+        let input = "aws_access_key_id=FKIAEXAMPLEKEY000000";
+        let output = redact_secrets(input);
+        assert!(output.contains("***REDACTED***"));
+        assert!(!output.contains("FKIAEXAMPLEKEY000000"));
+    }
+
+    #[test]
+    fn redact_aws_secret_key_pattern() {
+        let input = "aws_secret_access_key='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'";
+        let output = redact_secrets(input);
+        assert!(output.contains("***REDACTED***"));
+    }
+
+    #[test]
+    fn redact_bearer_jwt_token() {
+        let input = "Authorization: Bearer fakejwtheader0000000000000000000000.data.signature";
+        let output = redact_secrets(input);
+        assert!(output.contains("Bearer ***REDACTED***"));
+    }
+
+    #[test]
+    fn redact_connection_string_postgres() {
+        let input = "conn_str=postgres://admin:password@host:5432/db_name?sslmode=require";
+        let output = redact_secrets(input);
+        assert!(output.contains("***REDACTED***"));
+    }
+
+    #[test]
+    fn redact_connection_string_variant() {
+        let input =
+            "connection_string='Server=db.example.com;Database=prod;User=admin;Password=s3cr3t'";
+        let output = redact_secrets(input);
+        assert!(output.contains("***REDACTED***"));
+    }
+
+    // --- False positives ---
+
+    #[test_case("This is a normal log message" ; "normal log")]
+    #[test_case("Processing 42 files in 100ms" ; "metrics text")]
+    #[test_case("User logged in successfully" ; "login text")]
+    #[test_case("SELECT * FROM users WHERE id = 1" ; "sql query")]
+    #[test_case("const x = 42;" ; "code snippet")]
+    #[test_case("config.yaml loaded successfully" ; "config load")]
+    fn no_false_positives(text: &str) {
+        let output = redact_secrets(text);
+        pa_eq!(text, output.as_str(), "should not redact normal text");
+    }
+
+    #[test]
+    fn no_false_positive_short_api_key() {
+        // api_key with short value (< 20 chars) should not match
+        let input = "api_key=short";
+        let output = redact_secrets(input);
+        pa_eq!(input, output.as_str());
+    }
+
+    #[test]
+    fn no_false_positive_code_variable() {
+        let input = "let api_key_length = 32;";
+        let output = redact_secrets(input);
+        pa_eq!(input, output.as_str());
+    }
+
+    #[test]
+    fn redact_preserves_surrounding_text() {
+        let input = "before api_key=rk_skey_abcdefghij1234567890 after";
+        let output = redact_secrets(input);
+        assert!(output.contains("before"));
+        assert!(output.contains("after"));
+        assert!(output.contains("***REDACTED***"));
+    }
+
+    #[test]
+    fn redact_multiple_secrets_in_text() {
+        let input = "api_key=rk_skey_aaaabbbbccccddddeeee\npassword=MyS3cr3tPassword!";
+        let output = redact_secrets(input);
+        assert!(!output.contains("rk_skey_aaaabbbbccccddddeeee"));
+        assert!(!output.contains("MyS3cr3tPassword!"));
+    }
+
+    #[test]
+    fn redact_quoted_values() {
+        let input = "api_key='rk_skey_abcdefghij1234567890'";
+        let output = redact_secrets(input);
+        assert!(output.contains("***REDACTED***"));
+    }
+
+    #[test]
+    fn redact_double_quoted_values() {
+        let input = "api_key=\"rk_skey_abcdefghij1234567890\"";
+        let output = redact_secrets(input);
+        assert!(output.contains("***REDACTED***"));
+    }
+
+    // --- Metrics extended ---
+
+    #[test]
+    fn metrics_mutation_and_json() {
+        let mut m = Metrics::new();
+        m.files_indexed = 50;
+        m.nodes_extracted = 200;
+        m.edges_extracted = 300;
+        m.search_queries = 5;
+        m.cache_hits = 3;
+        m.cache_misses = 2;
+        m.indexing_duration_ms = Some(100);
+
+        let json = m.to_json();
+        pa_eq!(json["files_indexed"], 50);
+        pa_eq!(json["nodes_extracted"], 200);
+        pa_eq!(json["edges_extracted"], 300);
+        pa_eq!(json["search_queries"], 5);
+        pa_eq!(json["cache_hits"], 3);
+        pa_eq!(json["cache_misses"], 2);
+        pa_eq!(json["indexing_duration_ms"], 100);
+    }
+
+    #[test]
+    fn metrics_cache_hit_rate_all_hits() {
+        let mut m = Metrics::new();
+        m.cache_hits = 10;
+        m.cache_misses = 0;
+        assert!((m.cache_hit_rate() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn metrics_cache_hit_rate_all_misses() {
+        let mut m = Metrics::new();
+        m.cache_hits = 0;
+        m.cache_misses = 10;
+        assert!((m.cache_hit_rate() - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn metrics_cache_hit_rate_half() {
+        let mut m = Metrics::new();
+        m.cache_hits = 5;
+        m.cache_misses = 5;
+        assert!((m.cache_hit_rate() - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn metrics_json_all_zero() {
+        let m = Metrics::new();
+        let json = m.to_json();
+        pa_eq!(json["files_indexed"], 0);
+        pa_eq!(json["nodes_extracted"], 0);
+        pa_eq!(json["edges_extracted"], 0);
+        pa_eq!(json["search_queries"], 0);
+        pa_eq!(json["cache_hits"], 0);
+        pa_eq!(json["cache_misses"], 0);
+        assert!(json["indexing_duration_ms"].is_null());
+    }
+
+    #[test]
+    fn metrics_large_values() {
+        let mut m = Metrics::new();
+        m.files_indexed = 100_000;
+        m.nodes_extracted = 1_000_000;
+        m.edges_extracted = 5_000_000;
+        m.indexing_duration_ms = Some(60_000);
+        m.search_queries = 999_999;
+
+        let json = m.to_json();
+        pa_eq!(json["files_indexed"], 100_000);
+        pa_eq!(json["nodes_extracted"], 1_000_000);
+        pa_eq!(json["indexing_duration_ms"], 60_000);
+    }
+
+    #[test]
+    fn metrics_default_cache_hit_rate_zero() {
+        let m = Metrics::default();
+        pa_eq!(m.cache_hit_rate(), 0.0);
+    }
+
+    // --- init_logging ---
+
+    #[test]
+    fn init_logging_idempotent() {
+        // Multiple calls should not panic
+        init_logging();
+        init_logging();
+        init_logging();
     }
 }

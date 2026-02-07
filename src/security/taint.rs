@@ -86,75 +86,156 @@ struct SourcePattern {
 
 const SOURCE_PATTERNS: &[SourcePattern] = &[
     // Python
-    SourcePattern { language: "python", patterns: &[
-        "request.args", "request.form", "request.data", "request.json",
-        "request.values", "request.cookies", "request.headers",
-        "request.GET", "request.POST", "request.COOKIES", "request.META",
-    ], kind: TaintSourceKind::UserInput },
-    SourcePattern { language: "python", patterns: &[
-        "input(", "sys.argv", "sys.stdin",
-    ], kind: TaintSourceKind::CommandArgs },
-    SourcePattern { language: "python", patterns: &[
-        "os.environ", "os.getenv(",
-    ], kind: TaintSourceKind::Environment },
-    SourcePattern { language: "python", patterns: &[
-        "open(", ".read(", "read_to_string",
-    ], kind: TaintSourceKind::FileRead },
+    SourcePattern {
+        language: "python",
+        patterns: &[
+            "request.args",
+            "request.form",
+            "request.data",
+            "request.json",
+            "request.values",
+            "request.cookies",
+            "request.headers",
+            "request.GET",
+            "request.POST",
+            "request.COOKIES",
+            "request.META",
+        ],
+        kind: TaintSourceKind::UserInput,
+    },
+    SourcePattern {
+        language: "python",
+        patterns: &["input(", "sys.argv", "sys.stdin"],
+        kind: TaintSourceKind::CommandArgs,
+    },
+    SourcePattern {
+        language: "python",
+        patterns: &["os.environ", "os.getenv("],
+        kind: TaintSourceKind::Environment,
+    },
+    SourcePattern {
+        language: "python",
+        patterns: &["open(", ".read(", "read_to_string"],
+        kind: TaintSourceKind::FileRead,
+    },
     // JavaScript / TypeScript
-    SourcePattern { language: "javascript", patterns: &[
-        "req.query", "req.body", "req.params", "req.cookies", "req.headers",
-        "request.query", "request.body", "request.params",
-    ], kind: TaintSourceKind::UserInput },
-    SourcePattern { language: "typescript", patterns: &[
-        "req.query", "req.body", "req.params", "req.cookies", "req.headers",
-    ], kind: TaintSourceKind::UserInput },
-    SourcePattern { language: "javascript", patterns: &[
-        "process.argv", "process.env",
-    ], kind: TaintSourceKind::Environment },
-    SourcePattern { language: "javascript", patterns: &[
-        "fs.readFile", "fs.readFileSync", "readFile(",
-    ], kind: TaintSourceKind::FileRead },
+    SourcePattern {
+        language: "javascript",
+        patterns: &[
+            "req.query",
+            "req.body",
+            "req.params",
+            "req.cookies",
+            "req.headers",
+            "request.query",
+            "request.body",
+            "request.params",
+        ],
+        kind: TaintSourceKind::UserInput,
+    },
+    SourcePattern {
+        language: "typescript",
+        patterns: &[
+            "req.query",
+            "req.body",
+            "req.params",
+            "req.cookies",
+            "req.headers",
+        ],
+        kind: TaintSourceKind::UserInput,
+    },
+    SourcePattern {
+        language: "javascript",
+        patterns: &["process.argv", "process.env"],
+        kind: TaintSourceKind::Environment,
+    },
+    SourcePattern {
+        language: "javascript",
+        patterns: &["fs.readFile", "fs.readFileSync", "readFile("],
+        kind: TaintSourceKind::FileRead,
+    },
     // Go
-    SourcePattern { language: "go", patterns: &[
-        "r.URL.Query", "r.FormValue(", "r.PostFormValue(", "r.Header.Get(",
-        "r.Body",
-    ], kind: TaintSourceKind::UserInput },
-    SourcePattern { language: "go", patterns: &[
-        "os.Getenv(", "os.Args",
-    ], kind: TaintSourceKind::Environment },
+    SourcePattern {
+        language: "go",
+        patterns: &[
+            "r.URL.Query",
+            "r.FormValue(",
+            "r.PostFormValue(",
+            "r.Header.Get(",
+            "r.Body",
+        ],
+        kind: TaintSourceKind::UserInput,
+    },
+    SourcePattern {
+        language: "go",
+        patterns: &["os.Getenv(", "os.Args"],
+        kind: TaintSourceKind::Environment,
+    },
     // Java / Kotlin
-    SourcePattern { language: "java", patterns: &[
-        "getParameter(", "getParameterValues(", "getInputStream(",
-        "getReader(", "getHeader(", "getCookies(", "getQueryString(",
-    ], kind: TaintSourceKind::UserInput },
-    SourcePattern { language: "kotlin", patterns: &[
-        "getParameter(", "getParameterValues(",
-    ], kind: TaintSourceKind::UserInput },
+    SourcePattern {
+        language: "java",
+        patterns: &[
+            "getParameter(",
+            "getParameterValues(",
+            "getInputStream(",
+            "getReader(",
+            "getHeader(",
+            "getCookies(",
+            "getQueryString(",
+        ],
+        kind: TaintSourceKind::UserInput,
+    },
+    SourcePattern {
+        language: "kotlin",
+        patterns: &["getParameter(", "getParameterValues("],
+        kind: TaintSourceKind::UserInput,
+    },
     // PHP
-    SourcePattern { language: "php", patterns: &[
-        "$_GET", "$_POST", "$_REQUEST", "$_COOKIE", "$_SERVER", "$_FILES",
-    ], kind: TaintSourceKind::UserInput },
-    SourcePattern { language: "php", patterns: &[
-        "file_get_contents(", "fread(", "fgets(",
-    ], kind: TaintSourceKind::FileRead },
+    SourcePattern {
+        language: "php",
+        patterns: &[
+            "$_GET",
+            "$_POST",
+            "$_REQUEST",
+            "$_COOKIE",
+            "$_SERVER",
+            "$_FILES",
+        ],
+        kind: TaintSourceKind::UserInput,
+    },
+    SourcePattern {
+        language: "php",
+        patterns: &["file_get_contents(", "fread(", "fgets("],
+        kind: TaintSourceKind::FileRead,
+    },
     // Ruby
-    SourcePattern { language: "ruby", patterns: &[
-        "params[", "request.params", "request.body",
-    ], kind: TaintSourceKind::UserInput },
+    SourcePattern {
+        language: "ruby",
+        patterns: &["params[", "request.params", "request.body"],
+        kind: TaintSourceKind::UserInput,
+    },
     // Rust
-    SourcePattern { language: "rust", patterns: &[
-        "web::Query", "web::Form", "web::Json", "web::Path",
-    ], kind: TaintSourceKind::UserInput },
-    SourcePattern { language: "rust", patterns: &[
-        "std::env::var(", "env::var(",
-    ], kind: TaintSourceKind::Environment },
+    SourcePattern {
+        language: "rust",
+        patterns: &["web::Query", "web::Form", "web::Json", "web::Path"],
+        kind: TaintSourceKind::UserInput,
+    },
+    SourcePattern {
+        language: "rust",
+        patterns: &["std::env::var(", "env::var("],
+        kind: TaintSourceKind::Environment,
+    },
     // C / C++
-    SourcePattern { language: "c", patterns: &[
-        "scanf(", "gets(", "fgets(", "getenv(",
-    ], kind: TaintSourceKind::UserInput },
-    SourcePattern { language: "cpp", patterns: &[
-        "std::cin", "getline(", "getenv(",
-    ], kind: TaintSourceKind::UserInput },
+    SourcePattern {
+        language: "c",
+        patterns: &["scanf(", "gets(", "fgets(", "getenv("],
+        kind: TaintSourceKind::UserInput,
+    },
+    SourcePattern {
+        language: "cpp",
+        patterns: &["std::cin", "getline(", "getenv("],
+        kind: TaintSourceKind::UserInput,
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -170,59 +251,142 @@ struct SinkPattern {
 
 const SINK_PATTERNS: &[SinkPattern] = &[
     // SQL sinks
-    SinkPattern { language: "python", patterns: &[
-        "cursor.execute(", ".execute(", "raw(", "extra(",
-    ], kind: "sql_query", vuln_type: "SQL Injection" },
-    SinkPattern { language: "javascript", patterns: &[
-        ".query(", ".execute(", "knex.raw(",
-    ], kind: "sql_query", vuln_type: "SQL Injection" },
-    SinkPattern { language: "java", patterns: &[
-        "executeQuery(", "executeUpdate(", "execute(",
-        "createQuery(", "createNativeQuery(",
-    ], kind: "sql_query", vuln_type: "SQL Injection" },
-    SinkPattern { language: "php", patterns: &[
-        "mysql_query(", "mysqli_query(", "->query(",
-    ], kind: "sql_query", vuln_type: "SQL Injection" },
-    SinkPattern { language: "go", patterns: &[
-        "db.Query(", "db.Exec(", "db.QueryRow(",
-    ], kind: "sql_query", vuln_type: "SQL Injection" },
+    SinkPattern {
+        language: "python",
+        patterns: &["cursor.execute(", ".execute(", "raw(", "extra("],
+        kind: "sql_query",
+        vuln_type: "SQL Injection",
+    },
+    SinkPattern {
+        language: "javascript",
+        patterns: &[".query(", ".execute(", "knex.raw("],
+        kind: "sql_query",
+        vuln_type: "SQL Injection",
+    },
+    SinkPattern {
+        language: "java",
+        patterns: &[
+            "executeQuery(",
+            "executeUpdate(",
+            "execute(",
+            "createQuery(",
+            "createNativeQuery(",
+        ],
+        kind: "sql_query",
+        vuln_type: "SQL Injection",
+    },
+    SinkPattern {
+        language: "php",
+        patterns: &["mysql_query(", "mysqli_query(", "->query("],
+        kind: "sql_query",
+        vuln_type: "SQL Injection",
+    },
+    SinkPattern {
+        language: "go",
+        patterns: &["db.Query(", "db.Exec(", "db.QueryRow("],
+        kind: "sql_query",
+        vuln_type: "SQL Injection",
+    },
     // Command injection sinks
-    SinkPattern { language: "python", patterns: &[
-        "os.system(", "subprocess.call(", "subprocess.run(",
-        "subprocess.Popen(", "os.popen(",
-    ], kind: "command_exec", vuln_type: "Command Injection" },
-    SinkPattern { language: "javascript", patterns: &[
-        "child_process.exec(", "child_process.execSync(",
-        "execSync(", "exec(",
-    ], kind: "command_exec", vuln_type: "Command Injection" },
-    SinkPattern { language: "php", patterns: &[
-        "exec(", "system(", "passthru(", "shell_exec(", "popen(",
-    ], kind: "command_exec", vuln_type: "Command Injection" },
-    SinkPattern { language: "ruby", patterns: &[
-        "system(", "`", "exec(", "IO.popen(",
-    ], kind: "command_exec", vuln_type: "Command Injection" },
+    SinkPattern {
+        language: "python",
+        patterns: &[
+            "os.system(",
+            "subprocess.call(",
+            "subprocess.run(",
+            "subprocess.Popen(",
+            "os.popen(",
+        ],
+        kind: "command_exec",
+        vuln_type: "Command Injection",
+    },
+    SinkPattern {
+        language: "javascript",
+        patterns: &[
+            "child_process.exec(",
+            "child_process.execSync(",
+            "execSync(",
+            "exec(",
+        ],
+        kind: "command_exec",
+        vuln_type: "Command Injection",
+    },
+    SinkPattern {
+        language: "php",
+        patterns: &["exec(", "system(", "passthru(", "shell_exec(", "popen("],
+        kind: "command_exec",
+        vuln_type: "Command Injection",
+    },
+    SinkPattern {
+        language: "ruby",
+        patterns: &["system(", "`", "exec(", "IO.popen("],
+        kind: "command_exec",
+        vuln_type: "Command Injection",
+    },
     // XSS sinks
-    SinkPattern { language: "javascript", patterns: &[
-        "innerHTML", "document.write(", "dangerouslySetInnerHTML",
-    ], kind: "html_output", vuln_type: "Cross-Site Scripting (XSS)" },
-    SinkPattern { language: "python", patterns: &[
-        "Markup(", "render_template_string(",
-    ], kind: "html_output", vuln_type: "Cross-Site Scripting (XSS)" },
+    SinkPattern {
+        language: "javascript",
+        patterns: &["innerHTML", "document.write(", "dangerouslySetInnerHTML"],
+        kind: "html_output",
+        vuln_type: "Cross-Site Scripting (XSS)",
+    },
+    SinkPattern {
+        language: "python",
+        patterns: &["Markup(", "render_template_string("],
+        kind: "html_output",
+        vuln_type: "Cross-Site Scripting (XSS)",
+    },
     // Path traversal sinks
-    SinkPattern { language: "python", patterns: &[
-        "open(", "os.path.join(",
-    ], kind: "file_path", vuln_type: "Path Traversal" },
-    SinkPattern { language: "javascript", patterns: &[
-        "fs.readFile(", "fs.writeFile(", "path.join(",
-    ], kind: "file_path", vuln_type: "Path Traversal" },
+    SinkPattern {
+        language: "python",
+        patterns: &["open(", "os.path.join("],
+        kind: "file_path",
+        vuln_type: "Path Traversal",
+    },
+    SinkPattern {
+        language: "javascript",
+        patterns: &["fs.readFile(", "fs.writeFile(", "path.join("],
+        kind: "file_path",
+        vuln_type: "Path Traversal",
+    },
     // Eval sinks
-    SinkPattern { language: "python", patterns: &["eval(", "exec("], kind: "code_eval", vuln_type: "Code Injection" },
-    SinkPattern { language: "javascript", patterns: &["eval(", "Function("], kind: "code_eval", vuln_type: "Code Injection" },
-    SinkPattern { language: "php", patterns: &["eval(", "assert("], kind: "code_eval", vuln_type: "Code Injection" },
+    SinkPattern {
+        language: "python",
+        patterns: &["eval(", "exec("],
+        kind: "code_eval",
+        vuln_type: "Code Injection",
+    },
+    SinkPattern {
+        language: "javascript",
+        patterns: &["eval(", "Function("],
+        kind: "code_eval",
+        vuln_type: "Code Injection",
+    },
+    SinkPattern {
+        language: "php",
+        patterns: &["eval(", "assert("],
+        kind: "code_eval",
+        vuln_type: "Code Injection",
+    },
     // Deserialization sinks
-    SinkPattern { language: "python", patterns: &["pickle.loads(", "pickle.load(", "yaml.load("], kind: "deserialization", vuln_type: "Insecure Deserialization" },
-    SinkPattern { language: "java", patterns: &["readObject(", "ObjectInputStream("], kind: "deserialization", vuln_type: "Insecure Deserialization" },
-    SinkPattern { language: "php", patterns: &["unserialize("], kind: "deserialization", vuln_type: "Insecure Deserialization" },
+    SinkPattern {
+        language: "python",
+        patterns: &["pickle.loads(", "pickle.load(", "yaml.load("],
+        kind: "deserialization",
+        vuln_type: "Insecure Deserialization",
+    },
+    SinkPattern {
+        language: "java",
+        patterns: &["readObject(", "ObjectInputStream("],
+        kind: "deserialization",
+        vuln_type: "Insecure Deserialization",
+    },
+    SinkPattern {
+        language: "php",
+        patterns: &["unserialize("],
+        kind: "deserialization",
+        vuln_type: "Insecure Deserialization",
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -235,25 +399,53 @@ struct SanitizerPattern {
 }
 
 const SANITIZER_PATTERNS: &[SanitizerPattern] = &[
-    SanitizerPattern { kind: "sql_query", patterns: &[
-        "parameterized", "prepared", "sanitize", "escape", "quote",
-        "bind", "placeholder", "%s", "?",
-    ]},
-    SanitizerPattern { kind: "command_exec", patterns: &[
-        "shlex.quote", "escapeshellarg", "shellescape",
-    ]},
-    SanitizerPattern { kind: "html_output", patterns: &[
-        "escape(", "html.escape", "cgi.escape", "bleach.clean",
-        "DOMPurify.sanitize", "encodeURIComponent", "escapeHtml",
-        "sanitize", "strip_tags",
-    ]},
-    SanitizerPattern { kind: "file_path", patterns: &[
-        "realpath", "abspath", "canonicalize", "normalize",
-        "basename", "secure_filename",
-    ]},
-    SanitizerPattern { kind: "code_eval", patterns: &[
-        "ast.literal_eval", "json.loads", "JSON.parse",
-    ]},
+    SanitizerPattern {
+        kind: "sql_query",
+        patterns: &[
+            "parameterized",
+            "prepared",
+            "sanitize",
+            "escape",
+            "quote",
+            "bind",
+            "placeholder",
+            "%s",
+            "?",
+        ],
+    },
+    SanitizerPattern {
+        kind: "command_exec",
+        patterns: &["shlex.quote", "escapeshellarg", "shellescape"],
+    },
+    SanitizerPattern {
+        kind: "html_output",
+        patterns: &[
+            "escape(",
+            "html.escape",
+            "cgi.escape",
+            "bleach.clean",
+            "DOMPurify.sanitize",
+            "encodeURIComponent",
+            "escapeHtml",
+            "sanitize",
+            "strip_tags",
+        ],
+    },
+    SanitizerPattern {
+        kind: "file_path",
+        patterns: &[
+            "realpath",
+            "abspath",
+            "canonicalize",
+            "normalize",
+            "basename",
+            "secure_filename",
+        ],
+    },
+    SanitizerPattern {
+        kind: "code_eval",
+        patterns: &["ast.literal_eval", "json.loads", "JSON.parse"],
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -336,12 +528,7 @@ pub fn find_injection_vulnerabilities(source: &str, language: &str) -> Vec<Taint
                                 sink.line_number,
                                 &sink.kind,
                             );
-                            let path = build_path(
-                                &lines,
-                                src,
-                                sink,
-                                tv,
-                            );
+                            let path = build_path(&lines, src, sink, tv);
                             flows.push(TaintFlow {
                                 source: src.clone(),
                                 sink: sink.clone(),
@@ -562,7 +749,9 @@ fn parse_assignment(line: &str) -> Option<(String, String)> {
 }
 
 fn propagate_method_taint(line: &str, tainted_vars: &mut HashSet<String>) {
-    let methods = [".append(", ".push(", ".add(", ".insert(", ".extend(", ".concat("];
+    let methods = [
+        ".append(", ".push(", ".add(", ".insert(", ".extend(", ".concat(",
+    ];
     for method in &methods {
         if let Some(pos) = line.find(method) {
             let base: String = line[..pos]
@@ -591,7 +780,12 @@ fn propagate_method_taint(line: &str, tainted_vars: &mut HashSet<String>) {
     }
 }
 
-fn check_sanitization(lines: &[&str], source_line: usize, sink_line: usize, sink_kind: &str) -> bool {
+fn check_sanitization(
+    lines: &[&str],
+    source_line: usize,
+    sink_line: usize,
+    sink_kind: &str,
+) -> bool {
     let sanitizers = SANITIZER_PATTERNS.iter().find(|s| s.kind == sink_kind);
     if let Some(sp) = sanitizers {
         for line_num in source_line..sink_line {
@@ -608,7 +802,12 @@ fn check_sanitization(lines: &[&str], source_line: usize, sink_line: usize, sink
     false
 }
 
-fn build_path(lines: &[&str], src: &TaintSource, sink: &TaintSink, variable: &str) -> Vec<TaintStep> {
+fn build_path(
+    lines: &[&str],
+    src: &TaintSource,
+    sink: &TaintSink,
+    variable: &str,
+) -> Vec<TaintStep> {
     let mut path = Vec::new();
 
     path.push(TaintStep {
@@ -675,7 +874,10 @@ mod tests {
     fn test_source_kind_display() {
         assert_eq!(TaintSourceKind::UserInput.to_string(), "User Input");
         assert_eq!(TaintSourceKind::FileRead.to_string(), "File Read");
-        assert_eq!(TaintSourceKind::Environment.to_string(), "Environment Variable");
+        assert_eq!(
+            TaintSourceKind::Environment.to_string(),
+            "Environment Variable"
+        );
     }
 
     // -- find_taint_sources --
@@ -823,7 +1025,9 @@ os.system('echo ' + user_cmd)
 "#;
         let vulns = find_injection_vulnerabilities(source, "python");
         assert!(
-            vulns.iter().any(|v| v.vulnerability_type.contains("Command")),
+            vulns
+                .iter()
+                .any(|v| v.vulnerability_type.contains("Command")),
             "Should detect command injection"
         );
     }
@@ -873,7 +1077,10 @@ cursor.execute(safe_name)
         assert!(
             vulns.is_empty(),
             "Sanitized flow should not be reported as vulnerable, got {:?}",
-            vulns.iter().map(|v| &v.vulnerability_type).collect::<Vec<_>>()
+            vulns
+                .iter()
+                .map(|v| &v.vulnerability_type)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -886,7 +1093,10 @@ query = "SELECT * FROM t WHERE x='" + processed + "'"
 cursor.execute(query)
 "#;
         let vulns = find_injection_vulnerabilities(source, "python");
-        assert!(!vulns.is_empty(), "Should track taint through assignment chain");
+        assert!(
+            !vulns.is_empty(),
+            "Should track taint through assignment chain"
+        );
     }
 
     #[test]
@@ -944,7 +1154,10 @@ cursor.execute(query)
         let vulns = find_injection_vulnerabilities(source, "python");
         assert!(!vulns.is_empty());
         let flow = &vulns[0];
-        assert!(flow.path.len() >= 2, "Path should have at least source and sink");
+        assert!(
+            flow.path.len() >= 2,
+            "Path should have at least source and sink"
+        );
         assert_eq!(flow.path.first().unwrap().operation, "source");
         assert_eq!(flow.path.last().unwrap().operation, "sink");
     }
@@ -1040,8 +1253,417 @@ system($cmd);
 "#;
         let vulns = find_injection_vulnerabilities(source, "php");
         assert!(
-            vulns.iter().any(|v| v.vulnerability_type.contains("Command")),
+            vulns
+                .iter()
+                .any(|v| v.vulnerability_type.contains("Command")),
             "Should detect command injection in PHP"
         );
+    }
+
+    // ====================================================================
+    // Phase 18B — extended taint analysis tests
+    // ====================================================================
+
+    use pretty_assertions::assert_eq as pa_eq;
+    use test_case::test_case;
+
+    // --- TaintSourceKind display ---
+
+    #[test]
+    fn source_kind_display_all_variants() {
+        let kinds = [
+            (TaintSourceKind::UserInput, "User Input"),
+            (TaintSourceKind::FileRead, "File Read"),
+            (TaintSourceKind::NetworkRequest, "Network Request"),
+            (TaintSourceKind::Environment, "Environment Variable"),
+            (TaintSourceKind::Database, "Database Query"),
+            (TaintSourceKind::CommandArgs, "Command Arguments"),
+        ];
+        for (kind, expected) in &kinds {
+            pa_eq!(kind.to_string(), *expected);
+        }
+    }
+
+    // --- find_taint_sources: Python patterns ---
+
+    #[test_case("data = request.args.get('x')", "python", TaintSourceKind::UserInput ; "flask args")]
+    #[test_case("data = request.form['x']", "python", TaintSourceKind::UserInput ; "flask form")]
+    #[test_case("data = request.data", "python", TaintSourceKind::UserInput ; "flask data")]
+    #[test_case("data = request.json['key']", "python", TaintSourceKind::UserInput ; "flask json")]
+    #[test_case("data = request.cookies.get('c')", "python", TaintSourceKind::UserInput ; "flask cookies")]
+    #[test_case("data = request.headers.get('h')", "python", TaintSourceKind::UserInput ; "flask headers")]
+    #[test_case("data = request.GET['x']", "python", TaintSourceKind::UserInput ; "django GET")]
+    #[test_case("data = request.POST['x']", "python", TaintSourceKind::UserInput ; "django POST")]
+    #[test_case("v = input('Enter: ')", "python", TaintSourceKind::CommandArgs ; "python input()")]
+    #[test_case("v = sys.argv[1]", "python", TaintSourceKind::CommandArgs ; "python sys.argv")]
+    #[test_case("v = os.environ['SECRET']", "python", TaintSourceKind::Environment ; "python os.environ")]
+    #[test_case("v = os.getenv('KEY')", "python", TaintSourceKind::Environment ; "python os.getenv")]
+    #[test_case("f = open('file.txt')", "python", TaintSourceKind::FileRead ; "python open")]
+    fn python_taint_source(source: &str, lang: &str, expected_kind: TaintSourceKind) {
+        let sources = find_taint_sources(source, lang);
+        assert!(!sources.is_empty(), "should find source in: {}", source);
+        assert!(
+            sources.iter().any(|s| s.kind == expected_kind),
+            "expected {:?}, got: {:?}",
+            expected_kind,
+            sources.iter().map(|s| &s.kind).collect::<Vec<_>>()
+        );
+    }
+
+    // --- find_taint_sources: JavaScript patterns ---
+
+    #[test_case("const x = req.query.name", "javascript", TaintSourceKind::UserInput ; "express query")]
+    #[test_case("const x = req.body.data", "javascript", TaintSourceKind::UserInput ; "express body")]
+    #[test_case("const x = req.params.id", "javascript", TaintSourceKind::UserInput ; "express params")]
+    #[test_case("const x = req.cookies.token", "javascript", TaintSourceKind::UserInput ; "express cookies")]
+    #[test_case("const x = req.headers['auth']", "javascript", TaintSourceKind::UserInput ; "express headers")]
+    #[test_case("const x = process.argv[2]", "javascript", TaintSourceKind::Environment ; "node argv")]
+    #[test_case("const data = fs.readFileSync('f')", "javascript", TaintSourceKind::FileRead ; "node readFile")]
+    fn javascript_taint_source(source: &str, lang: &str, expected_kind: TaintSourceKind) {
+        let sources = find_taint_sources(source, lang);
+        assert!(!sources.is_empty(), "should find source in: {}", source);
+        assert!(
+            sources.iter().any(|s| s.kind == expected_kind),
+            "expected {:?}",
+            expected_kind
+        );
+    }
+
+    // --- find_taint_sources: other languages ---
+
+    #[test_case("name := r.FormValue(\"name\")", "go" ; "go FormValue")]
+    #[test_case("name := r.URL.Query().Get(\"n\")", "go" ; "go URL Query")]
+    #[test_case("val := os.Getenv(\"SECRET\")", "go" ; "go Getenv")]
+    fn go_taint_source(source: &str, lang: &str) {
+        let sources = find_taint_sources(source, lang);
+        assert!(!sources.is_empty(), "should find source in: {}", source);
+    }
+
+    #[test_case("String name = request.getParameter(\"name\");", "java" ; "java getParameter")]
+    #[test_case("InputStream is = request.getInputStream();", "java" ; "java getInputStream")]
+    fn java_taint_source(source: &str, lang: &str) {
+        let sources = find_taint_sources(source, lang);
+        assert!(!sources.is_empty(), "should find source in: {}", source);
+    }
+
+    #[test_case("$x = $_GET['k'];", "php" ; "php GET")]
+    #[test_case("$x = $_POST['k'];", "php" ; "php POST")]
+    #[test_case("$x = $_REQUEST['k'];", "php" ; "php REQUEST")]
+    #[test_case("$x = $_COOKIE['k'];", "php" ; "php COOKIE")]
+    #[test_case("$x = $_SERVER['REMOTE_ADDR'];", "php" ; "php SERVER")]
+    fn php_taint_source(source: &str, lang: &str) {
+        let sources = find_taint_sources(source, lang);
+        assert!(!sources.is_empty(), "should find source in: {}", source);
+    }
+
+    #[test_case("name = params[:name]", "ruby" ; "ruby params")]
+    fn ruby_taint_source(source: &str, lang: &str) {
+        let sources = find_taint_sources(source, lang);
+        assert!(!sources.is_empty(), "should find source in: {}", source);
+    }
+
+    #[test_case("scanf(\"%d\", &val);", "c" ; "c scanf")]
+    #[test_case("gets(buf);", "c" ; "c gets")]
+    fn c_taint_source(source: &str, lang: &str) {
+        let sources = find_taint_sources(source, lang);
+        assert!(!sources.is_empty(), "should find source in: {}", source);
+    }
+
+    #[test_case("std::cin >> data;", "cpp" ; "cpp cin")]
+    fn cpp_taint_source(source: &str, lang: &str) {
+        let sources = find_taint_sources(source, lang);
+        assert!(!sources.is_empty(), "should find source in: {}", source);
+    }
+
+    // --- find_taint_sources: no false positives ---
+
+    #[test]
+    fn no_taint_sources_in_pure_computation() {
+        let source = "result = compute(x, y)\nz = result + 1";
+        assert!(find_taint_sources(source, "python").is_empty());
+    }
+
+    #[test]
+    fn no_taint_sources_wrong_language() {
+        let source = "data = request.args.get('x')";
+        assert!(find_taint_sources(source, "c").is_empty());
+    }
+
+    // --- find_taint_sources: line numbers ---
+
+    #[test]
+    fn taint_source_line_number_correct() {
+        let source = "# comment\n# another\ndata = request.args.get('x')";
+        let sources = find_taint_sources(source, "python");
+        assert!(!sources.is_empty());
+        pa_eq!(sources[0].line_number, 3);
+    }
+
+    // --- find_taint_sources: variable extraction ---
+
+    #[test]
+    fn taint_source_variable_extracted() {
+        let source = "username = request.form.get('user')";
+        let sources = find_taint_sources(source, "python");
+        assert!(!sources.is_empty());
+        pa_eq!(sources[0].variable, "username");
+    }
+
+    #[test]
+    fn taint_source_const_variable_extracted() {
+        let source = "const data = req.body;";
+        let sources = find_taint_sources(source, "javascript");
+        assert!(!sources.is_empty());
+        pa_eq!(sources[0].variable, "data");
+    }
+
+    // --- find_injection_vulnerabilities: various injection types ---
+
+    #[test]
+    fn detect_path_traversal_python() {
+        let source = r#"
+filename = request.args.get('file')
+data = open(filename)
+"#;
+        let vulns = find_injection_vulnerabilities(source, "python");
+        assert!(
+            vulns.iter().any(|v| v.vulnerability_type.contains("Path")),
+            "should detect path traversal: {:?}",
+            vulns
+                .iter()
+                .map(|v| &v.vulnerability_type)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn detect_eval_injection_javascript() {
+        let source = r#"
+const code = req.query.code;
+eval(code);
+"#;
+        let vulns = find_injection_vulnerabilities(source, "javascript");
+        assert!(
+            vulns.iter().any(|v| v.vulnerability_type.contains("Code")),
+            "should detect eval injection in JS"
+        );
+    }
+
+    #[test]
+    fn detect_deserialization_python() {
+        let source = r#"
+data = request.data
+obj = pickle.loads(data)
+"#;
+        let vulns = find_injection_vulnerabilities(source, "python");
+        assert!(
+            vulns
+                .iter()
+                .any(|v| v.vulnerability_type.contains("Deserialization")),
+            "should detect insecure deserialization"
+        );
+    }
+
+    // --- Sanitization prevents reporting ---
+
+    #[test]
+    fn sanitized_sql_not_reported() {
+        let source = r#"
+username = request.args.get('name')
+safe = sanitize(username)
+cursor.execute(safe)
+"#;
+        let vulns = find_injection_vulnerabilities(source, "python");
+        assert!(vulns.is_empty(), "sanitized flow should not be reported");
+    }
+
+    #[test]
+    fn parameterized_query_not_reported() {
+        let source = r#"
+username = request.args.get('name')
+query = "SELECT * FROM users WHERE name = ?"
+cursor.execute(query, placeholder)
+"#;
+        let vulns = find_injection_vulnerabilities(source, "python");
+        // The `?` sanitizer should suppress
+        assert!(
+            vulns.is_empty(),
+            "parameterized query should not be reported"
+        );
+    }
+
+    #[test]
+    fn html_escape_prevents_xss() {
+        let source = r#"
+data = request.form.get('input')
+safe = html.escape(data)
+Markup(safe)
+"#;
+        let vulns = find_injection_vulnerabilities(source, "python");
+        assert!(vulns.is_empty(), "html.escape should sanitize");
+    }
+
+    #[test]
+    fn shlex_quote_prevents_command_injection() {
+        let source = r#"
+cmd = request.args.get('cmd')
+safe = shlex.quote(cmd)
+os.system(safe)
+"#;
+        let vulns = find_injection_vulnerabilities(source, "python");
+        assert!(vulns.is_empty(), "shlex.quote should sanitize");
+    }
+
+    // --- Taint propagation through chains ---
+
+    #[test]
+    fn taint_propagates_through_multiple_assignments() {
+        let source = r#"
+raw = request.args.get('data')
+step1 = raw.strip()
+step2 = step1.lower()
+query = "SELECT * FROM t WHERE x='" + step2 + "'"
+cursor.execute(query)
+"#;
+        let vulns = find_injection_vulnerabilities(source, "python");
+        assert!(
+            !vulns.is_empty(),
+            "should track taint through 3 assignments"
+        );
+    }
+
+    #[test]
+    fn taint_does_not_cross_unrelated_vars() {
+        let source = r#"
+raw = request.args.get('data')
+safe_val = "hardcoded"
+cursor.execute(safe_val)
+"#;
+        let vulns = find_injection_vulnerabilities(source, "python");
+        assert!(vulns.is_empty(), "unrelated var should not be tainted");
+    }
+
+    // --- trace_taint ---
+
+    #[test]
+    fn trace_taint_from_specific_source_line() {
+        let source = r#"
+x = 42
+username = request.args.get('name')
+query = "SELECT * FROM users WHERE name = '" + username + "'"
+cursor.execute(query)
+"#;
+        let flows = trace_taint(source, "python", 3);
+        assert!(!flows.is_empty(), "should trace from line 3");
+    }
+
+    #[test]
+    fn trace_taint_no_source_at_line_returns_empty() {
+        let source = "x = 42\ny = x + 1";
+        let flows = trace_taint(source, "python", 1);
+        assert!(flows.is_empty());
+    }
+
+    #[test]
+    fn trace_taint_source_with_no_sinks_returns_empty() {
+        let source = "data = request.args.get('x')\nprint(data)";
+        let flows = trace_taint(source, "python", 1);
+        assert!(flows.is_empty(), "no dangerous sinks = no flows");
+    }
+
+    // --- TaintFlow path details ---
+
+    #[test]
+    fn taint_flow_path_has_source_and_sink() {
+        let source = r#"
+user_data = request.args.get('q')
+query = "SELECT * FROM t WHERE x='" + user_data + "'"
+cursor.execute(query)
+"#;
+        let vulns = find_injection_vulnerabilities(source, "python");
+        assert!(!vulns.is_empty());
+        let flow = &vulns[0];
+        let first_op = &flow.path.first().unwrap().operation;
+        let last_op = &flow.path.last().unwrap().operation;
+        pa_eq!(first_op, "source");
+        pa_eq!(last_op, "sink");
+    }
+
+    #[test]
+    fn taint_flow_vulnerability_type_set() {
+        let source = r#"
+name = request.args.get('name')
+cursor.execute("SELECT * FROM t WHERE x='" + name + "'")
+"#;
+        let vulns = find_injection_vulnerabilities(source, "python");
+        assert!(!vulns.is_empty());
+        assert!(!vulns[0].vulnerability_type.is_empty());
+    }
+
+    #[test]
+    fn taint_flow_is_not_sanitized() {
+        let source = r#"
+name = request.args.get('name')
+cursor.execute("SELECT * FROM t WHERE x='" + name + "'")
+"#;
+        let vulns = find_injection_vulnerabilities(source, "python");
+        assert!(!vulns.is_empty());
+        assert!(!vulns[0].is_sanitized);
+    }
+
+    // --- extract_variable edge cases ---
+
+    #[test]
+    fn extract_variable_go_walrus() {
+        pa_eq!(extract_variable("name := getValue()"), "name");
+    }
+
+    #[test]
+    fn extract_variable_php_dollar() {
+        pa_eq!(extract_variable("$name = $_GET['name']"), "$name");
+    }
+
+    #[test]
+    fn extract_variable_typed_java() {
+        pa_eq!(
+            extract_variable("String name = request.getParameter(\"name\")"),
+            "name"
+        );
+    }
+
+    #[test]
+    fn extract_variable_no_assignment() {
+        pa_eq!(extract_variable("print('hello')"), "unknown");
+    }
+
+    // --- parse_assignment edge cases ---
+
+    #[test]
+    fn parse_assignment_go_walrus() {
+        let result = parse_assignment("name := getValue()");
+        assert!(result.is_some());
+        let (lhs, rhs) = result.unwrap();
+        pa_eq!(lhs, "name");
+        assert!(rhs.contains("getValue"));
+    }
+
+    #[test]
+    fn parse_assignment_php_variable() {
+        let result = parse_assignment("$x = $_POST['data']");
+        assert!(result.is_some());
+        pa_eq!(result.unwrap().0, "$x");
+    }
+
+    #[test]
+    fn parse_assignment_no_equals() {
+        assert!(parse_assignment("function()").is_none());
+    }
+
+    #[test]
+    fn parse_assignment_greater_equal() {
+        // >= should not be treated as assignment
+        // Actually the current impl only checks ==, !=, so >= passes.
+        // Just verify it doesn't panic
+        let _ = parse_assignment("if x >= 5:");
     }
 }

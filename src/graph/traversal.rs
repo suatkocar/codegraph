@@ -198,6 +198,9 @@ impl<'a> GraphTraversal<'a> {
     /// Find all callees (outgoing "calls" edges) from a node, up to `max_depth`.
     /// This is the forward call graph — what does this function call?
     pub fn find_callees(&self, node_id: &str, max_depth: u32) -> Result<Vec<NodeWithDepth>> {
+        if max_depth == 0 {
+            return Ok(Vec::new());
+        }
         let mut stmt = self.store.conn.prepare_cached(FIND_CALLEES_SQL)?;
         let rows = stmt.query_and_then(params![node_id, max_depth], |row| {
             let node = row_to_code_node(row)?;
@@ -214,6 +217,9 @@ impl<'a> GraphTraversal<'a> {
 
     /// Find all callers (incoming "calls" edges) of a node, up to `max_depth`.
     pub fn find_callers(&self, node_id: &str, max_depth: u32) -> Result<Vec<NodeWithDepth>> {
+        if max_depth == 0 {
+            return Ok(Vec::new());
+        }
         let mut stmt = self.store.conn.prepare_cached(FIND_CALLERS_SQL)?;
         let rows = stmt.query_and_then(params![node_id, max_depth], |row| {
             let node = row_to_code_node(row)?;
@@ -999,11 +1005,17 @@ mod tests {
 
         // max_depth=2 should NOT find path a->d (needs 3 hops)
         let path = traversal.find_call_path("a", "d", 2).unwrap();
-        assert!(path.is_none(), "3-hop path should not be found with max_depth=2");
+        assert!(
+            path.is_none(),
+            "3-hop path should not be found with max_depth=2"
+        );
 
         // max_depth=3 SHOULD find it
         let path = traversal.find_call_path("a", "d", 3).unwrap();
-        assert!(path.is_some(), "3-hop path should be found with max_depth=3");
+        assert!(
+            path.is_some(),
+            "3-hop path should be found with max_depth=3"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1048,5 +1060,578 @@ mod tests {
         // Only "calls" edges are followed, so only "a" should appear
         assert_eq!(callers.len(), 1);
         assert_eq!(callers[0].node.id, "a");
+    }
+
+    // =====================================================================
+    // NEW TESTS: Phase 18C — Traversal comprehensive coverage
+    // =====================================================================
+
+    // -- Diamond graph: a->b, a->c, b->d, c->d ---------------------------
+
+    fn seed_diamond(store: &GraphStore) {
+        store
+            .upsert_nodes(&[
+                make_node("a", "alpha", "src/a.ts", NodeKind::Function, 1),
+                make_node("b", "beta", "src/b.ts", NodeKind::Function, 1),
+                make_node("c", "gamma", "src/c.ts", NodeKind::Function, 1),
+                make_node("d", "delta", "src/d.ts", NodeKind::Function, 1),
+            ])
+            .unwrap();
+        store
+            .upsert_edges(&[
+                make_edge("a", "b", EdgeKind::Calls, "src/a.ts", 2),
+                make_edge("a", "c", EdgeKind::Calls, "src/a.ts", 3),
+                make_edge("b", "d", EdgeKind::Calls, "src/b.ts", 2),
+                make_edge("c", "d", EdgeKind::Calls, "src/c.ts", 2),
+            ])
+            .unwrap();
+    }
+
+    #[test]
+    fn diamond_dependencies_from_root() {
+        let store = setup();
+        seed_diamond(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let deps = traversal.find_dependencies("a", 5).unwrap();
+        assert_eq!(deps.len(), 3);
+        let ids: Vec<&str> = deps.iter().map(|d| d.node.id.as_str()).collect();
+        assert!(ids.contains(&"b"));
+        assert!(ids.contains(&"c"));
+        assert!(ids.contains(&"d"));
+    }
+
+    #[test]
+    fn diamond_callees_from_root() {
+        let store = setup();
+        seed_diamond(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let callees = traversal.find_callees("a", 5).unwrap();
+        assert_eq!(callees.len(), 3);
+        // depth 1: b, c; depth 2: d
+        assert!(callees.iter().any(|c| c.node.id == "d" && c.depth == 2));
+    }
+
+    #[test]
+    fn diamond_callers_of_sink() {
+        let store = setup();
+        seed_diamond(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let callers = traversal.find_callers("d", 5).unwrap();
+        assert_eq!(callers.len(), 3); // b, c at depth 1; a at depth 2
+        assert!(callers.iter().any(|c| c.node.id == "a" && c.depth == 2));
+    }
+
+    #[test]
+    fn diamond_find_call_path_two_routes() {
+        let store = setup();
+        seed_diamond(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        // BFS finds shortest path: a->b->d or a->c->d (both length 2)
+        let path = traversal.find_call_path("a", "d", 5).unwrap();
+        assert!(path.is_some());
+        let nodes = path.unwrap();
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes[0].id, "a");
+        assert_eq!(nodes[2].id, "d");
+    }
+
+    // -- Wide graph: hub -> 50 spokes ------------------------------------
+
+    #[test]
+    fn wide_graph_callees() {
+        let store = setup();
+        let mut nodes = vec![make_node("hub", "hub", "src/hub.ts", NodeKind::Function, 1)];
+        let mut edges = Vec::new();
+        for i in 0..50 {
+            let id = format!("spoke{}", i);
+            nodes.push(make_node(
+                &id,
+                &format!("spoke{}", i),
+                "src/spokes.ts",
+                NodeKind::Function,
+                i + 10,
+            ));
+            edges.push(make_edge("hub", &id, EdgeKind::Calls, "src/hub.ts", i + 2));
+        }
+        store.upsert_nodes(&nodes).unwrap();
+        store.upsert_edges(&edges).unwrap();
+
+        let traversal = GraphTraversal::new(&store);
+        let callees = traversal.find_callees("hub", 1).unwrap();
+        assert_eq!(callees.len(), 50);
+    }
+
+    #[test]
+    fn wide_graph_dependencies() {
+        let store = setup();
+        let mut nodes = vec![make_node("hub", "hub", "src/hub.ts", NodeKind::Function, 1)];
+        let mut edges = Vec::new();
+        for i in 0..30 {
+            let id = format!("dep{}", i);
+            nodes.push(make_node(
+                &id,
+                &format!("dep{}", i),
+                "src/deps.ts",
+                NodeKind::Function,
+                i + 10,
+            ));
+            edges.push(make_edge(
+                "hub",
+                &id,
+                EdgeKind::Imports,
+                "src/hub.ts",
+                i + 1,
+            ));
+        }
+        store.upsert_nodes(&nodes).unwrap();
+        store.upsert_edges(&edges).unwrap();
+
+        let traversal = GraphTraversal::new(&store);
+        let deps = traversal.find_dependencies("hub", 1).unwrap();
+        assert_eq!(deps.len(), 30);
+    }
+
+    // -- Deep chain: depth 20 -------------------------------------------
+
+    #[test]
+    fn deep_chain_full_traversal() {
+        let store = setup();
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        for i in 0..20 {
+            nodes.push(make_node(
+                &format!("n{}", i),
+                &format!("fn{}", i),
+                &format!("src/{}.ts", i),
+                NodeKind::Function,
+                1,
+            ));
+        }
+        for i in 0..19 {
+            edges.push(make_edge(
+                &format!("n{}", i),
+                &format!("n{}", i + 1),
+                EdgeKind::Calls,
+                &format!("src/{}.ts", i),
+                2,
+            ));
+        }
+        store.upsert_nodes(&nodes).unwrap();
+        store.upsert_edges(&edges).unwrap();
+
+        let traversal = GraphTraversal::new(&store);
+
+        let callees = traversal.find_callees("n0", 25).unwrap();
+        assert_eq!(callees.len(), 19);
+        assert_eq!(callees.last().unwrap().depth, 19);
+    }
+
+    #[test]
+    fn deep_chain_depth_limited() {
+        let store = setup();
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        for i in 0..20 {
+            nodes.push(make_node(
+                &format!("n{}", i),
+                &format!("fn{}", i),
+                "src/chain.ts",
+                NodeKind::Function,
+                i + 1,
+            ));
+        }
+        for i in 0..19 {
+            edges.push(make_edge(
+                &format!("n{}", i),
+                &format!("n{}", i + 1),
+                EdgeKind::Calls,
+                "src/chain.ts",
+                i + 2,
+            ));
+        }
+        store.upsert_nodes(&nodes).unwrap();
+        store.upsert_edges(&edges).unwrap();
+
+        let traversal = GraphTraversal::new(&store);
+        let callees = traversal.find_callees("n0", 5).unwrap();
+        assert_eq!(callees.len(), 5);
+    }
+
+    // -- Mixed edge types -------------------------------------------------
+
+    #[test]
+    fn mixed_edge_types_dependencies() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("a", "alpha", "src/a.ts", NodeKind::Function, 1),
+                make_node("b", "beta", "src/b.ts", NodeKind::Function, 1),
+                make_node("c", "gamma", "src/c.ts", NodeKind::Class, 1),
+                make_node("d", "delta", "src/d.ts", NodeKind::Interface, 1),
+            ])
+            .unwrap();
+        store
+            .upsert_edges(&[
+                make_edge("a", "b", EdgeKind::Calls, "src/a.ts", 2),
+                make_edge("a", "c", EdgeKind::Imports, "src/a.ts", 1),
+                make_edge("c", "d", EdgeKind::Extends, "src/c.ts", 2),
+            ])
+            .unwrap();
+
+        let traversal = GraphTraversal::new(&store);
+
+        // find_dependencies follows all edge types
+        let deps = traversal.find_dependencies("a", 5).unwrap();
+        let ids: Vec<&str> = deps.iter().map(|d| d.node.id.as_str()).collect();
+        assert!(ids.contains(&"b"));
+        assert!(ids.contains(&"c"));
+        assert!(ids.contains(&"d"));
+
+        // find_callees only follows "calls" edges
+        let callees = traversal.find_callees("a", 5).unwrap();
+        assert_eq!(callees.len(), 1);
+        assert_eq!(callees[0].node.id, "b");
+    }
+
+    // -- detect_cycles: multiple independent cycles -----------------------
+
+    #[test]
+    fn detect_cycles_multiple_independent() {
+        let store = setup();
+        // Cycle 1: x -> y -> x
+        // Cycle 2: p -> q -> r -> p
+        store
+            .upsert_nodes(&[
+                make_node("x", "ex", "src/x.ts", NodeKind::Function, 1),
+                make_node("y", "why", "src/y.ts", NodeKind::Function, 1),
+                make_node("p", "pee", "src/p.ts", NodeKind::Function, 1),
+                make_node("q", "queue", "src/q.ts", NodeKind::Function, 1),
+                make_node("r", "arr", "src/r.ts", NodeKind::Function, 1),
+            ])
+            .unwrap();
+        store
+            .upsert_edges(&[
+                make_edge("x", "y", EdgeKind::Calls, "src/x.ts", 2),
+                make_edge("y", "x", EdgeKind::Calls, "src/y.ts", 2),
+                make_edge("p", "q", EdgeKind::Calls, "src/p.ts", 2),
+                make_edge("q", "r", EdgeKind::Calls, "src/q.ts", 2),
+                make_edge("r", "p", EdgeKind::Calls, "src/r.ts", 2),
+            ])
+            .unwrap();
+
+        let traversal = GraphTraversal::new(&store);
+        let cycles = traversal.detect_cycles().unwrap();
+        assert_eq!(cycles.len(), 2);
+
+        let sizes: Vec<usize> = cycles.iter().map(|c| c.size).collect();
+        assert!(sizes.contains(&2));
+        assert!(sizes.contains(&3));
+    }
+
+    #[test]
+    fn detect_cycles_self_loop() {
+        let store = setup();
+        store
+            .upsert_node(&make_node("a", "alpha", "src/a.ts", NodeKind::Function, 1))
+            .unwrap();
+        store
+            .upsert_edge(&make_edge("a", "a", EdgeKind::Calls, "src/a.ts", 2))
+            .unwrap();
+
+        let traversal = GraphTraversal::new(&store);
+        let cycles = traversal.detect_cycles().unwrap();
+        // Self-loop is not a 2+ SCC in Tarjan's unless explicitly counted
+        // The implementation only returns SCCs with size >= 2
+        // A self-loop creates a single-node SCC so it won't appear
+        assert!(cycles.is_empty() || cycles.iter().all(|c| c.size >= 2));
+    }
+
+    #[test]
+    fn detect_cycles_empty_graph() {
+        let store = setup();
+        let traversal = GraphTraversal::new(&store);
+        let cycles = traversal.detect_cycles().unwrap();
+        assert!(cycles.is_empty());
+    }
+
+    // -- find_call_path: various patterns ---------------------------------
+
+    #[test]
+    fn find_call_path_diamond_shortest() {
+        let store = setup();
+        seed_diamond(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let path = traversal.find_call_path("a", "d", 10).unwrap();
+        assert!(path.is_some());
+        // BFS guarantees shortest path: 3 nodes (a, {b|c}, d)
+        assert_eq!(path.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn find_call_path_disconnected_nodes() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("a", "alpha", "src/a.ts", NodeKind::Function, 1),
+                make_node("b", "beta", "src/b.ts", NodeKind::Function, 1),
+            ])
+            .unwrap();
+        // No edges between a and b
+
+        let traversal = GraphTraversal::new(&store);
+        let path = traversal.find_call_path("a", "b", 10).unwrap();
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn find_call_path_ignores_import_edges() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("a", "alpha", "src/a.ts", NodeKind::Function, 1),
+                make_node("b", "beta", "src/b.ts", NodeKind::Function, 1),
+            ])
+            .unwrap();
+        store
+            .upsert_edge(&make_edge("a", "b", EdgeKind::Imports, "src/a.ts", 1))
+            .unwrap();
+
+        let traversal = GraphTraversal::new(&store);
+        let path = traversal.find_call_path("a", "b", 10).unwrap();
+        assert!(
+            path.is_none(),
+            "find_call_path should only follow calls edges"
+        );
+    }
+
+    // -- get_neighborhood: various radii ----------------------------------
+
+    #[test]
+    fn get_neighborhood_radius_zero() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let n = traversal.get_neighborhood("b", 0).unwrap();
+        // Radius 0 means just the node itself
+        assert_eq!(n.nodes.len(), 1);
+        assert_eq!(n.nodes[0].id, "b");
+    }
+
+    #[test]
+    fn get_neighborhood_radius_two() {
+        let store = setup();
+        seed_linear_chain(&store); // a -> b -> c -> d
+        let traversal = GraphTraversal::new(&store);
+
+        let n = traversal.get_neighborhood("b", 2).unwrap();
+        let ids: Vec<&str> = n.nodes.iter().map(|n| n.id.as_str()).collect();
+        // Radius 2 from b: a (1 hop back), b, c (1 hop forward), d (2 hops forward)
+        assert!(ids.contains(&"a"));
+        assert!(ids.contains(&"b"));
+        assert!(ids.contains(&"c"));
+        assert!(ids.contains(&"d"));
+    }
+
+    #[test]
+    fn get_neighborhood_full_radius() {
+        let store = setup();
+        seed_linear_chain(&store); // a -> b -> c -> d
+        let traversal = GraphTraversal::new(&store);
+
+        let n = traversal.get_neighborhood("b", 10).unwrap();
+        assert_eq!(n.nodes.len(), 4); // all 4 nodes reachable
+    }
+
+    #[test]
+    fn get_neighborhood_includes_edges_between_nodes() {
+        let store = setup();
+        seed_diamond(&store); // a->b, a->c, b->d, c->d
+        let traversal = GraphTraversal::new(&store);
+
+        let n = traversal.get_neighborhood("a", 2).unwrap();
+        assert_eq!(n.nodes.len(), 4);
+        assert_eq!(n.edges.len(), 4);
+    }
+
+    // -- find_dependencies: no deps for leaf node -------------------------
+
+    #[test]
+    fn find_dependencies_leaf_node_empty() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let deps = traversal.find_dependencies("d", 5).unwrap();
+        assert!(deps.is_empty(), "leaf node d has no outgoing dependencies");
+    }
+
+    // -- find_callers: root node has no callers ---------------------------
+
+    #[test]
+    fn find_callers_root_node_empty() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let callers = traversal.find_callers("a", 5).unwrap();
+        assert!(callers.is_empty(), "root node a has no callers");
+    }
+
+    // -- find_callees: empty for node with no calls -----------------------
+
+    #[test]
+    fn find_callees_empty_for_isolated_node() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "solo",
+                "solo",
+                "src/solo.ts",
+                NodeKind::Function,
+                1,
+            ))
+            .unwrap();
+        let traversal = GraphTraversal::new(&store);
+
+        let callees = traversal.find_callees("solo", 5).unwrap();
+        assert!(callees.is_empty());
+    }
+
+    // -- find_transitive_deps on diamond ----------------------------------
+
+    #[test]
+    fn find_transitive_deps_diamond() {
+        let store = setup();
+        seed_diamond(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let deps = traversal.find_transitive_deps("a").unwrap();
+        assert_eq!(deps.len(), 3);
+    }
+
+    // -- find_tests: no tests available -----------------------------------
+
+    #[test]
+    fn find_tests_returns_empty_when_no_tests() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("fn1", "doWork", "src/worker.ts", NodeKind::Function, 1),
+                make_node("fn2", "helper", "src/helper.ts", NodeKind::Function, 1),
+            ])
+            .unwrap();
+        store
+            .upsert_edge(&make_edge(
+                "fn2",
+                "fn1",
+                EdgeKind::Calls,
+                "src/helper.ts",
+                5,
+            ))
+            .unwrap();
+
+        let traversal = GraphTraversal::new(&store);
+        let tests = traversal.find_tests("fn1").unwrap();
+        assert!(tests.is_empty());
+    }
+
+    // -- find_dependencies: nonexistent start node returns empty ----------
+
+    #[test]
+    fn find_dependencies_nonexistent_node() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let deps = traversal.find_dependencies("nonexistent", 5).unwrap();
+        assert!(deps.is_empty());
+    }
+
+    // -- find_callees: max_depth 0 returns empty --------------------------
+
+    #[test]
+    fn find_callees_max_depth_zero() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let callees = traversal.find_callees("a", 0).unwrap();
+        assert!(callees.is_empty(), "depth 0 means no traversal");
+    }
+
+    // -- find_callers: max_depth 0 returns empty --------------------------
+
+    #[test]
+    fn find_callers_max_depth_zero() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let callers = traversal.find_callers("d", 0).unwrap();
+        assert!(callers.is_empty());
+    }
+
+    // -- find_call_path: with cycle in graph doesn't hang -----------------
+
+    #[test]
+    fn find_call_path_in_cyclic_graph() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("a", "alpha", "src/a.ts", NodeKind::Function, 1),
+                make_node("b", "beta", "src/b.ts", NodeKind::Function, 1),
+                make_node("c", "gamma", "src/c.ts", NodeKind::Function, 1),
+            ])
+            .unwrap();
+        store
+            .upsert_edges(&[
+                make_edge("a", "b", EdgeKind::Calls, "src/a.ts", 2),
+                make_edge("b", "c", EdgeKind::Calls, "src/b.ts", 2),
+                make_edge("c", "a", EdgeKind::Calls, "src/c.ts", 2),
+            ])
+            .unwrap();
+
+        let traversal = GraphTraversal::new(&store);
+        let path = traversal.find_call_path("a", "c", 10).unwrap();
+        assert!(path.is_some());
+        let nodes = path.unwrap();
+        assert_eq!(nodes.len(), 3); // a -> b -> c
+    }
+
+    // -- find_dependencies: depth ordering --------------------------------
+
+    #[test]
+    fn find_dependencies_ordered_by_depth() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let deps = traversal.find_dependencies("a", 10).unwrap();
+        for i in 1..deps.len() {
+            assert!(
+                deps[i].depth >= deps[i - 1].depth,
+                "results should be ordered by depth"
+            );
+        }
+    }
+
+    // -- find_callers: depth ordering -------------------------------------
+
+    #[test]
+    fn find_callers_ordered_by_depth() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let traversal = GraphTraversal::new(&store);
+
+        let callers = traversal.find_callers("d", 10).unwrap();
+        for i in 1..callers.len() {
+            assert!(callers[i].depth >= callers[i - 1].depth);
+        }
     }
 }

@@ -29,8 +29,8 @@ pub struct ComplexityResult {
 
 /// Branch keywords that increment cyclomatic complexity by 1.
 const BRANCH_KEYWORDS: &[&str] = &[
-    "if", "else if", "elif", "else", "for", "while", "loop", "match",
-    "case", "catch", "except", "?",
+    "if", "else if", "elif", "else", "for", "while", "loop", "match", "case", "catch", "except",
+    "?",
 ];
 
 /// Logical operators that increment cyclomatic complexity.
@@ -38,8 +38,7 @@ const LOGICAL_OPS: &[&str] = &["&&", "||"];
 
 /// Keywords that increment cognitive complexity AND increase nesting.
 const NESTING_KEYWORDS: &[&str] = &[
-    "if", "else if", "elif", "for", "while", "loop", "match", "switch",
-    "try", "catch", "except",
+    "if", "else if", "elif", "for", "while", "loop", "match", "switch", "try", "catch", "except",
 ];
 
 /// Keywords that increment cognitive complexity but do NOT nest.
@@ -210,7 +209,7 @@ fn count_keyword_occurrences(line: &str, keyword: &str) -> u32 {
     }
 
     // For operators like "?" — just count substring occurrences.
-    if !keyword.chars().next().map_or(false, |c| c.is_alphabetic()) {
+    if !keyword.chars().next().is_some_and(|c| c.is_alphabetic()) {
         return count_substr_occurrences(line, keyword);
     }
 
@@ -223,10 +222,9 @@ fn count_keyword_occurrences(line: &str, keyword: &str) -> u32 {
     while start + kw_len <= bytes.len() {
         if let Some(pos) = line[start..].find(keyword) {
             let abs_pos = start + pos;
-            let before_ok = abs_pos == 0
-                || !is_ident_char(bytes[abs_pos - 1]);
-            let after_ok = abs_pos + kw_len >= bytes.len()
-                || !is_ident_char(bytes[abs_pos + kw_len]);
+            let before_ok = abs_pos == 0 || !is_ident_char(bytes[abs_pos - 1]);
+            let after_ok =
+                abs_pos + kw_len >= bytes.len() || !is_ident_char(bytes[abs_pos + kw_len]);
 
             if before_ok && after_ok {
                 count += 1;
@@ -404,8 +402,8 @@ def process(items):
 
     #[test]
     fn calculate_all_from_database() {
-        let conn = crate::db::schema::initialize_database(":memory:")
-            .expect("schema init should succeed");
+        let conn =
+            crate::db::schema::initialize_database(":memory:").expect("schema init should succeed");
 
         let meta = serde_json::json!({
             "body": "function foo() {\n  if (x) {\n    return 1;\n  }\n  return 0;\n}"
@@ -445,5 +443,258 @@ def process(items):
         assert_eq!(count_keyword_occurrences("if (x > 0)", "if"), 1);
         // "else if" in a line
         assert_eq!(count_keyword_occurrences("} else if (y) {", "else if"), 1);
+    }
+
+    // =====================================================================
+    // NEW TESTS: Phase 18C — Complexity comprehensive coverage
+    // =====================================================================
+
+    // -- cyclomatic complexity patterns -----------------------------------
+
+    #[test]
+    fn cyclomatic_single_return() {
+        let body = "fn simple() { return 1; }";
+        let result = calculate_complexity("simple", body, "test.rs", "test-id");
+        assert_eq!(result.cyclomatic, 1);
+    }
+
+    #[test]
+    fn cyclomatic_one_if() {
+        let body = "fn check(x) {\n  if x > 0 {\n    return true;\n  }\n  false\n}";
+        let result = calculate_complexity("check", body, "test.rs", "test-id");
+        assert_eq!(result.cyclomatic, 2);
+    }
+
+    #[test]
+    fn cyclomatic_if_else() {
+        let body =
+            "fn check(x) {\n  if x > 0 {\n    return true;\n  } else {\n    return false;\n  }\n}";
+        let result = calculate_complexity("check", body, "test.rs", "test-id");
+        assert_eq!(result.cyclomatic, 3); // 1 + if + else
+    }
+
+    #[test]
+    fn cyclomatic_nested_ifs() {
+        let body = "fn validate(a, b) {\n  if a > 0 {\n    if b > 0 {\n      return true;\n    }\n  }\n  false\n}";
+        let result = calculate_complexity("validate", body, "test.rs", "test-id");
+        assert_eq!(result.cyclomatic, 3); // 1 + 2 ifs
+    }
+
+    #[test]
+    fn cyclomatic_for_loop() {
+        let body = "fn process(items) {\n  for item in items {\n    doWork(item);\n  }\n}";
+        let result = calculate_complexity("process", body, "test.rs", "test-id");
+        assert_eq!(result.cyclomatic, 2); // 1 + for
+    }
+
+    #[test]
+    fn cyclomatic_while_loop() {
+        let body = "fn drain() {\n  while !empty() {\n    take();\n  }\n}";
+        let result = calculate_complexity("drain", body, "test.rs", "test-id");
+        assert_eq!(result.cyclomatic, 2); // 1 + while
+    }
+
+    #[test]
+    fn cyclomatic_loop_with_if() {
+        let body = "fn process(items) {\n  for item in items {\n    if item.active {\n      handle(item);\n    }\n  }\n}";
+        let result = calculate_complexity("process", body, "test.rs", "test-id");
+        assert_eq!(result.cyclomatic, 3); // 1 + for + if
+    }
+
+    #[test]
+    fn cyclomatic_match_arms() {
+        let body = "fn describe(x) {\n  match x {\n    1 => \"one\",\n    2 => \"two\",\n    _ => \"other\",\n  }\n}";
+        let result = calculate_complexity("describe", body, "test.rs", "test-id");
+        // match keyword + case keywords count
+        assert!(result.cyclomatic >= 2);
+    }
+
+    #[test]
+    fn cyclomatic_switch_case() {
+        let body = "function handle(x) {\n  switch (x) {\n    case 1:\n      break;\n    case 2:\n      break;\n    case 3:\n      break;\n  }\n}";
+        let result = calculate_complexity("handle", body, "test.js", "test-id");
+        // 1 + 3 case keywords = 4
+        assert!(result.cyclomatic >= 4);
+    }
+
+    #[test]
+    fn cyclomatic_try_catch() {
+        let body = "function risky() {\n  try {\n    doWork();\n  } catch (e) {\n    handleError(e);\n  }\n}";
+        let result = calculate_complexity("risky", body, "test.js", "test-id");
+        assert!(result.cyclomatic >= 2); // 1 + catch
+    }
+
+    #[test]
+    fn cyclomatic_python_elif() {
+        let body = "def classify(x):\n    if x > 0:\n        return \"positive\"\n    elif x < 0:\n        return \"negative\"\n    else:\n        return \"zero\"";
+        let result = calculate_complexity("classify", body, "test.py", "test-id");
+        // 1 + if + elif + else = 4
+        assert_eq!(result.cyclomatic, 4);
+    }
+
+    #[test]
+    fn cyclomatic_ternary_operator() {
+        let body = "const result = condition ? true : false;";
+        let result = calculate_complexity("expr", body, "test.js", "test-id");
+        // 1 + ? = 2
+        assert_eq!(result.cyclomatic, 2);
+    }
+
+    #[test]
+    fn cyclomatic_multiple_logical_ops() {
+        let body = "if (a && b && c || d || e) { doWork(); }";
+        let result = calculate_complexity("complex", body, "test.js", "test-id");
+        // 1 + if + 2*&& + 2*|| = 6
+        assert_eq!(result.cyclomatic, 6);
+    }
+
+    // -- cognitive complexity patterns ------------------------------------
+
+    #[test]
+    fn cognitive_flat_code_is_zero() {
+        let body = "let x = 10;\nlet y = 20;\nreturn x + y;";
+        let result = calculate_complexity("flat", body, "test.js", "test-id");
+        assert_eq!(result.cognitive, 0);
+    }
+
+    #[test]
+    fn cognitive_nested_deeper_costs_more() {
+        let body_shallow = "fn check(x) {\n  if x > 0 {\n    return true;\n  }\n}";
+        let body_deep = "fn check(x) {\n  if x > 0 {\n    if x > 10 {\n      if x > 100 {\n        return true;\n      }\n    }\n  }\n}";
+        let shallow = calculate_complexity("shallow", body_shallow, "test.rs", "s-id");
+        let deep = calculate_complexity("deep", body_deep, "test.rs", "d-id");
+        assert!(
+            deep.cognitive > shallow.cognitive,
+            "deeply nested code should have higher cognitive complexity: deep={} shallow={}",
+            deep.cognitive,
+            shallow.cognitive
+        );
+    }
+
+    #[test]
+    fn cognitive_logical_operators_add_one() {
+        let body = "if (a && b || c) { return true; }";
+        let result = calculate_complexity("logic", body, "test.js", "test-id");
+        assert!(result.cognitive >= 2); // at least if + logical ops
+    }
+
+    // -- line count -------------------------------------------------------
+
+    #[test]
+    fn line_count_single_line() {
+        let result = calculate_complexity("one", "return 42;", "test.js", "test-id");
+        assert_eq!(result.line_count, 1);
+    }
+
+    #[test]
+    fn line_count_multi_line() {
+        let body = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10";
+        let result = calculate_complexity("ten", body, "test.js", "test-id");
+        assert_eq!(result.line_count, 10);
+    }
+
+    // -- result fields ----------------------------------------------------
+
+    #[test]
+    fn result_fields_populated() {
+        let result = calculate_complexity("myFunc", "return 1;", "src/lib.rs", "fn:myFunc:1");
+        assert_eq!(result.name, "myFunc");
+        assert_eq!(result.file_path, "src/lib.rs");
+        assert_eq!(result.node_id, "fn:myFunc:1");
+    }
+
+    // -- keyword counting edge cases --------------------------------------
+
+    #[test]
+    fn keyword_not_matched_in_string_literal_context() {
+        // "if" as keyword vs "if" in identifier
+        assert_eq!(count_keyword_occurrences("notify_if_changed(x)", "if"), 0);
+    }
+
+    #[test]
+    fn keyword_multiple_occurrences() {
+        assert_eq!(count_keyword_occurrences("if (a) {} if (b) {}", "if"), 2);
+    }
+
+    #[test]
+    fn keyword_for_not_in_format() {
+        assert_eq!(count_keyword_occurrences("format(x)", "for"), 0);
+    }
+
+    #[test]
+    fn keyword_while_not_in_meanwhile() {
+        assert_eq!(count_keyword_occurrences("meanwhile()", "while"), 0);
+    }
+
+    #[test]
+    fn substr_occurrences_multiple() {
+        assert_eq!(count_substr_occurrences("a && b && c && d", "&&"), 3);
+    }
+
+    #[test]
+    fn substr_occurrences_none() {
+        assert_eq!(count_substr_occurrences("a + b + c", "&&"), 0);
+    }
+
+    #[test]
+    fn is_ident_char_letters() {
+        assert!(is_ident_char(b'a'));
+        assert!(is_ident_char(b'Z'));
+        assert!(is_ident_char(b'_'));
+        assert!(is_ident_char(b'5'));
+        assert!(!is_ident_char(b' '));
+        assert!(!is_ident_char(b'('));
+    }
+
+    // -- calculate_all_complexities: no functions in DB --------------------
+
+    #[test]
+    fn calculate_all_from_database_no_functions() {
+        let conn = crate::db::schema::initialize_database(":memory:").unwrap();
+        // Insert a class node (not function/method)
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language, source_hash) \
+             VALUES ('cls:foo:1', 'class', 'Foo', 'src/lib.ts', 1, 10, 'typescript', 'h1')",
+            [],
+        ).unwrap();
+
+        let results = calculate_all_complexities(&conn);
+        assert!(
+            results.is_empty(),
+            "no function/method nodes means no complexity results"
+        );
+    }
+
+    // -- complex real-world-like function ---------------------------------
+
+    #[test]
+    fn complex_function_high_cyclomatic() {
+        let body = "\
+function processOrders(orders) {
+  for (const order of orders) {
+    if (order.type === 'standard') {
+      if (order.amount > 100) {
+        applyDiscount(order);
+      } else if (order.amount > 50) {
+        applySmallDiscount(order);
+      } else {
+        noDiscount(order);
+      }
+    } else if (order.type === 'premium') {
+      if (order.amount > 0 && order.valid) {
+        processPremium(order);
+      }
+    } else {
+      rejectOrder(order);
+    }
+  }
+}";
+        let result = calculate_complexity("processOrders", body, "test.js", "test-id");
+        // High CC: for + multiple if/else if/else + &&
+        assert!(
+            result.cyclomatic >= 8,
+            "expected CC >= 8, got {}",
+            result.cyclomatic
+        );
     }
 }

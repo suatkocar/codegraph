@@ -1285,9 +1285,12 @@ impl CodeGraphServer {
         #[schemars(description = "Exclude test files from scan (default true)")]
         exclude_tests: Option<bool>,
     ) -> String {
-        let dir = directory.map(PathBuf::from).unwrap_or_else(|| self.project_root.clone());
+        let dir = directory
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.project_root.clone());
         let rules = security::rules::load_bundled_rules();
-        let summary = security::scanner::scan_directory(&dir, &rules, exclude_tests.unwrap_or(true));
+        let summary =
+            security::scanner::scan_directory(&dir, &rules, exclude_tests.unwrap_or(true));
         json_text(&serde_json::json!({
             "totalFindings": summary.total_findings,
             "critical": summary.critical, "high": summary.high,
@@ -1314,7 +1317,9 @@ impl CodeGraphServer {
         #[schemars(description = "Directory to scan (defaults to project root)")]
         directory: Option<String>,
     ) -> String {
-        let dir = directory.map(PathBuf::from).unwrap_or_else(|| self.project_root.clone());
+        let dir = directory
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.project_root.clone());
         let summary = security::scanner::check_owasp_top10(&dir);
         json_text(&serde_json::json!({
             "standard": "OWASP Top 10 2021",
@@ -1340,7 +1345,9 @@ impl CodeGraphServer {
         #[schemars(description = "Directory to scan (defaults to project root)")]
         directory: Option<String>,
     ) -> String {
-        let dir = directory.map(PathBuf::from).unwrap_or_else(|| self.project_root.clone());
+        let dir = directory
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.project_root.clone());
         let summary = security::scanner::check_cwe_top25(&dir);
         json_text(&serde_json::json!({
             "standard": "CWE Top 25",
@@ -1477,7 +1484,9 @@ impl CodeGraphServer {
         #[schemars(description = "Directory to analyze (defaults to project root)")]
         directory: Option<String>,
     ) -> String {
-        let dir = directory.map(PathBuf::from).unwrap_or_else(|| self.project_root.clone());
+        let dir = directory
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.project_root.clone());
         let rules = security::rules::load_bundled_rules();
         let summary = security::scanner::scan_directory(&dir, &rules, true);
         json_text(&serde_json::json!({
@@ -1595,25 +1604,37 @@ impl CodeGraphServer {
         let mut dir_files: HashMap<String, HashSet<String>> = HashMap::new();
         for node in &all_nodes {
             let parts: Vec<&str> = node.file_path.rsplitn(2, '/').collect();
-            let dir = if parts.len() > 1 { parts[1].to_string() } else { ".".to_string() };
-            dir_files.entry(dir).or_default().insert(node.file_path.clone());
+            let dir = if parts.len() > 1 {
+                parts[1].to_string()
+            } else {
+                ".".to_string()
+            };
+            dir_files
+                .entry(dir)
+                .or_default()
+                .insert(node.file_path.clone());
         }
 
         let depth = max_depth.unwrap_or(3);
-        let mut tree: Vec<serde_json::Value> = dir_files.iter()
+        let mut tree: Vec<serde_json::Value> = dir_files
+            .iter()
             .filter(|(dir, _)| dir.matches('/').count() < depth)
             .map(|(dir, files)| {
-                let symbol_count = all_nodes.iter().filter(|n| {
-                    let parts: Vec<&str> = n.file_path.rsplitn(2, '/').collect();
-                    let ndir = if parts.len() > 1 { parts[1] } else { "." };
-                    ndir == dir
-                }).count();
+                let symbol_count = all_nodes
+                    .iter()
+                    .filter(|n| {
+                        let parts: Vec<&str> = n.file_path.rsplitn(2, '/').collect();
+                        let ndir = if parts.len() > 1 { parts[1] } else { "." };
+                        ndir == dir
+                    })
+                    .count();
                 serde_json::json!({
                     "directory": dir,
                     "fileCount": files.len(),
                     "symbolCount": symbol_count,
                 })
-            }).collect();
+            })
+            .collect();
         tree.sort_by(|a, b| a["directory"].as_str().cmp(&b["directory"].as_str()));
 
         json_text(&serde_json::json!({
@@ -1636,7 +1657,11 @@ impl CodeGraphServer {
     ) -> String {
         let node = match self.resolve_symbol(&symbol) {
             Some(n) => n,
-            None => return json_text(&serde_json::json!({"error": format!("Symbol \"{}\" not found.", symbol)})),
+            None => {
+                return json_text(
+                    &serde_json::json!({"error": format!("Symbol \"{}\" not found.", symbol)}),
+                )
+            }
         };
 
         let store = self.store.lock().unwrap();
@@ -1680,20 +1705,25 @@ impl CodeGraphServer {
             Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
         };
 
-        let exported: Vec<&CodeNode> = all_nodes.iter()
+        let exported: Vec<&CodeNode> = all_nodes
+            .iter()
             .filter(|n| n.exported == Some(true))
             .collect();
 
         let mut by_file: HashMap<&str, Vec<serde_json::Value>> = HashMap::new();
         for node in &exported {
-            by_file.entry(&node.file_path).or_default().push(serde_json::json!({
-                "name": node.name, "kind": node.kind.as_str(),
-                "line": node.start_line,
-                "qualifiedName": node.qualified_name,
-            }));
+            by_file
+                .entry(&node.file_path)
+                .or_default()
+                .push(serde_json::json!({
+                    "name": node.name, "kind": node.kind.as_str(),
+                    "line": node.start_line,
+                    "qualifiedName": node.qualified_name,
+                }));
         }
 
-        let mut files: Vec<serde_json::Value> = by_file.into_iter()
+        let mut files: Vec<serde_json::Value> = by_file
+            .into_iter()
             .map(|(fp, symbols)| serde_json::json!({"filePath": fp, "exports": symbols}))
             .collect();
         files.sort_by(|a, b| a["filePath"].as_str().cmp(&b["filePath"].as_str()));
@@ -1726,11 +1756,13 @@ impl CodeGraphServer {
             Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
         };
 
-        let import_edges: Vec<_> = all_edges.iter()
+        let import_edges: Vec<_> = all_edges
+            .iter()
             .filter(|e| e.kind == crate::types::EdgeKind::Imports)
             .collect();
 
-        let node_file_map: HashMap<&str, &str> = all_nodes.iter()
+        let node_file_map: HashMap<&str, &str> = all_nodes
+            .iter()
             .map(|n| (n.id.as_str(), n.file_path.as_str()))
             .collect();
 
@@ -1754,14 +1786,24 @@ impl CodeGraphServer {
         let mut all_files = HashSet::new();
         for (src, targets) in &file_imports {
             all_files.insert(*src);
-            for tgt in targets { all_files.insert(*tgt); }
+            for tgt in targets {
+                all_files.insert(*tgt);
+            }
         }
         for file in &all_files {
-            lines.push(format!("  {}[\"{}\"]", mermaid_id(file), mermaid_safe(file)));
+            lines.push(format!(
+                "  {}[\"{}\"]",
+                mermaid_id(file),
+                mermaid_safe(file)
+            ));
         }
         for (src, targets) in &file_imports {
             for tgt in targets {
-                lines.push(format!("  {} -->|imports| {}", mermaid_id(src), mermaid_id(tgt)));
+                lines.push(format!(
+                    "  {} -->|imports| {}",
+                    mermaid_id(src),
+                    mermaid_id(tgt)
+                ));
             }
         }
         lines.push("```".to_string());
@@ -1824,11 +1866,19 @@ impl CodeGraphServer {
     ) -> String {
         let from_node = match self.resolve_symbol(&from) {
             Some(n) => n,
-            None => return json_text(&serde_json::json!({"error": format!("Source symbol \"{}\" not found.", from)})),
+            None => {
+                return json_text(
+                    &serde_json::json!({"error": format!("Source symbol \"{}\" not found.", from)}),
+                )
+            }
         };
         let to_node = match self.resolve_symbol(&to) {
             Some(n) => n,
-            None => return json_text(&serde_json::json!({"error": format!("Target symbol \"{}\" not found.", to)})),
+            None => {
+                return json_text(
+                    &serde_json::json!({"error": format!("Target symbol \"{}\" not found.", to)}),
+                )
+            }
         };
 
         let store = self.store.lock().unwrap();
@@ -1857,7 +1907,9 @@ impl CodeGraphServer {
     async fn codegraph_complexity(
         &self,
         #[tool(param)]
-        #[schemars(description = "Minimum cyclomatic complexity to include in results (default 5)")]
+        #[schemars(
+            description = "Minimum cyclomatic complexity to include in results (default 5)"
+        )]
         min_complexity: Option<u32>,
     ) -> String {
         let store = self.store.lock().unwrap();
@@ -2457,5 +2509,605 @@ mod tests {
         let languages = json["languages"].as_array().unwrap();
         assert_eq!(languages[0]["language"].as_str().unwrap(), "rust");
         assert_eq!(languages[0]["percentage"].as_str().unwrap(), "100.0%");
+    }
+
+    // =====================================================================
+    // NEW TESTS: Phase 18C — MCP Server comprehensive coverage
+    // =====================================================================
+
+    // -- codegraph_stats --------------------------------------------------
+
+    #[tokio::test]
+    async fn stats_empty_graph() {
+        let server = setup_server();
+        let result = server.codegraph_stats().await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["nodes"].as_u64().unwrap(), 0);
+        assert_eq!(json["edges"].as_u64().unwrap(), 0);
+        assert_eq!(json["files"].as_u64().unwrap(), 0);
+        assert_eq!(json["unresolvedRefs"].as_u64().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn stats_with_data() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[
+                    make_node("n1", "a", "src/a.ts", NodeKind::Function, 1, None),
+                    make_node("n2", "b", "src/b.ts", NodeKind::Function, 1, None),
+                ])
+                .unwrap();
+            store
+                .upsert_edge(&make_edge("n1", "n2", EdgeKind::Calls, "src/a.ts", 5))
+                .unwrap();
+            store
+                .insert_unresolved_ref("n1", "./missing", "import", "src/a.ts", 1)
+                .unwrap();
+        }
+        let result = server.codegraph_stats().await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["nodes"].as_u64().unwrap(), 2);
+        assert_eq!(json["edges"].as_u64().unwrap(), 1);
+        assert_eq!(json["files"].as_u64().unwrap(), 2);
+        assert_eq!(json["unresolvedRefs"].as_u64().unwrap(), 1);
+    }
+
+    // -- codegraph_circular_imports ---------------------------------------
+
+    #[tokio::test]
+    async fn circular_imports_no_cycles() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[
+                    make_node("n1", "a", "a.ts", NodeKind::Function, 1, None),
+                    make_node("n2", "b", "b.ts", NodeKind::Function, 1, None),
+                ])
+                .unwrap();
+            store
+                .upsert_edge(&make_edge("n1", "n2", EdgeKind::Calls, "a.ts", 5))
+                .unwrap();
+        }
+        let result = server.codegraph_circular_imports().await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["cycleCount"].as_u64().unwrap(), 0);
+        assert!(json["message"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn circular_imports_with_cycle() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[
+                    make_node("n1", "a", "a.ts", NodeKind::Function, 1, None),
+                    make_node("n2", "b", "b.ts", NodeKind::Function, 1, None),
+                ])
+                .unwrap();
+            store
+                .upsert_edges(&[
+                    make_edge("n1", "n2", EdgeKind::Calls, "a.ts", 5),
+                    make_edge("n2", "n1", EdgeKind::Calls, "b.ts", 3),
+                ])
+                .unwrap();
+        }
+        let result = server.codegraph_circular_imports().await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["cycleCount"].as_u64().unwrap(), 1);
+        let cycles = json["cycles"].as_array().unwrap();
+        assert_eq!(cycles[0]["size"].as_u64().unwrap(), 2);
+    }
+
+    // -- codegraph_project_tree -------------------------------------------
+
+    #[tokio::test]
+    async fn project_tree_empty() {
+        let server = setup_server();
+        let result = server.codegraph_project_tree(None).await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["tree"].is_array() || json["message"].is_string() || json.is_object());
+    }
+
+    #[tokio::test]
+    async fn project_tree_with_files() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[
+                    make_node("n1", "a", "src/lib/a.ts", NodeKind::Function, 1, None),
+                    make_node("n2", "b", "src/lib/b.ts", NodeKind::Function, 1, None),
+                    make_node("n3", "c", "src/utils/c.ts", NodeKind::Function, 1, None),
+                ])
+                .unwrap();
+        }
+        let result = server.codegraph_project_tree(Some(2)).await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json.is_object());
+    }
+
+    // -- codegraph_find_references ----------------------------------------
+
+    #[tokio::test]
+    async fn find_references_existing_symbol() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[
+                    make_node("n1", "helper", "src/a.ts", NodeKind::Function, 1, None),
+                    make_node("n2", "caller1", "src/b.ts", NodeKind::Function, 1, None),
+                    make_node("n3", "caller2", "src/c.ts", NodeKind::Function, 1, None),
+                ])
+                .unwrap();
+            store
+                .upsert_edges(&[
+                    make_edge("n2", "n1", EdgeKind::Calls, "src/b.ts", 5),
+                    make_edge("n3", "n1", EdgeKind::Calls, "src/c.ts", 3),
+                ])
+                .unwrap();
+        }
+        let result = server.codegraph_find_references("helper".to_string()).await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["referenceCount"].as_u64().unwrap() >= 2);
+    }
+
+    #[tokio::test]
+    async fn find_references_nonexistent_symbol() {
+        let server = setup_server();
+        let result = server
+            .codegraph_find_references("nonexistent".to_string())
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["error"].is_string());
+    }
+
+    // -- codegraph_export_map ---------------------------------------------
+
+    #[tokio::test]
+    async fn export_map_with_exports() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[
+                    make_node(
+                        "n1",
+                        "publicFunc",
+                        "src/a.ts",
+                        NodeKind::Function,
+                        1,
+                        Some(true),
+                    ),
+                    make_node(
+                        "n2",
+                        "privateFunc",
+                        "src/a.ts",
+                        NodeKind::Function,
+                        10,
+                        Some(false),
+                    ),
+                    make_node(
+                        "n3",
+                        "anotherPublic",
+                        "src/b.ts",
+                        NodeKind::Function,
+                        1,
+                        Some(true),
+                    ),
+                ])
+                .unwrap();
+        }
+        let result = server.codegraph_export_map().await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json.is_object());
+    }
+
+    #[tokio::test]
+    async fn export_map_empty() {
+        let server = setup_server();
+        let result = server.codegraph_export_map().await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json.is_object());
+    }
+
+    // -- codegraph_find_path ----------------------------------------------
+
+    #[tokio::test]
+    async fn find_path_existing() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[
+                    make_node("n1", "start", "src/a.ts", NodeKind::Function, 1, None),
+                    make_node("n2", "middle", "src/b.ts", NodeKind::Function, 1, None),
+                    make_node("n3", "end", "src/c.ts", NodeKind::Function, 1, None),
+                ])
+                .unwrap();
+            store
+                .upsert_edges(&[
+                    make_edge("n1", "n2", EdgeKind::Calls, "src/a.ts", 5),
+                    make_edge("n2", "n3", EdgeKind::Calls, "src/b.ts", 3),
+                ])
+                .unwrap();
+        }
+        let result = server
+            .codegraph_find_path("start".to_string(), "end".to_string(), None)
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["path"].is_array());
+        assert_eq!(json["pathLength"].as_u64().unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn find_path_no_route() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[
+                    make_node("n1", "isolated_a", "src/a.ts", NodeKind::Function, 1, None),
+                    make_node("n2", "isolated_b", "src/b.ts", NodeKind::Function, 1, None),
+                ])
+                .unwrap();
+        }
+        let result = server
+            .codegraph_find_path("isolated_a".to_string(), "isolated_b".to_string(), None)
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["message"].as_str().unwrap().contains("No call path"));
+    }
+
+    // -- codegraph_complexity ---------------------------------------------
+
+    #[tokio::test]
+    async fn complexity_analysis() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            let meta = serde_json::json!({
+                "body": "function process(x) {\n  if (x > 0) {\n    return true;\n  }\n  return false;\n}"
+            });
+            store.conn.execute(
+                "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language, source_hash, metadata) \
+                 VALUES ('fn:a:1', 'function', 'process', 'src/a.ts', 1, 6, 'typescript', 'h1', ?1)",
+                [meta.to_string()],
+            ).unwrap();
+        }
+        let result = server.codegraph_complexity(None).await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["functions"].is_array());
+    }
+
+    #[tokio::test]
+    async fn complexity_empty_graph() {
+        let server = setup_server();
+        let result = server.codegraph_complexity(None).await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json.is_object());
+    }
+
+    // -- codegraph_data_flow ----------------------------------------------
+
+    #[tokio::test]
+    async fn data_flow_analysis() {
+        let server = setup_server();
+        let result = server
+            .codegraph_data_flow(
+                "let x = 10;\nlet y = x + 5;".to_string(),
+                "javascript".to_string(),
+            )
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["chains"].is_array());
+    }
+
+    #[tokio::test]
+    async fn data_flow_empty_source() {
+        let server = setup_server();
+        let result = server
+            .codegraph_data_flow("".to_string(), "javascript".to_string())
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["chains"].is_array());
+    }
+
+    // -- codegraph_dead_stores --------------------------------------------
+
+    #[tokio::test]
+    async fn dead_stores_detection() {
+        let server = setup_server();
+        let result = server
+            .codegraph_dead_stores(
+                "let x = 10;\nlet y = 20;\nconsole.log(y);".to_string(),
+                "javascript".to_string(),
+            )
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["stores"].is_array());
+        let stores = json["stores"].as_array().unwrap();
+        assert!(stores
+            .iter()
+            .any(|s| s["variable"].as_str().unwrap() == "x"));
+    }
+
+    // -- codegraph_find_uninitialized -------------------------------------
+
+    #[tokio::test]
+    async fn find_uninitialized_vars() {
+        let server = setup_server();
+        let result = server
+            .codegraph_find_uninitialized(
+                "console.log(result);\nlet result = compute();".to_string(),
+                "javascript".to_string(),
+            )
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["locations"].is_array());
+    }
+
+    // -- codegraph_reaching_defs ------------------------------------------
+
+    #[tokio::test]
+    async fn reaching_defs_analysis() {
+        let server = setup_server();
+        let result = server
+            .codegraph_reaching_defs(
+                "let x = 10;\nlet y = 20;\nlet z = x + y;".to_string(),
+                "javascript".to_string(),
+                3,
+            )
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["reachingDefinitions"].is_array());
+    }
+
+    // -- codegraph_query --------------------------------------------------
+
+    #[tokio::test]
+    async fn query_with_results() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_node(&make_node(
+                    "n1",
+                    "searchable",
+                    "src/a.ts",
+                    NodeKind::Function,
+                    1,
+                    None,
+                ))
+                .unwrap();
+        }
+        let result = server
+            .codegraph_query("searchable".to_string(), Some(5), None)
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json.is_array());
+    }
+
+    #[tokio::test]
+    async fn query_empty_results() {
+        let server = setup_server();
+        let result = server
+            .codegraph_query("nonexistent".to_string(), None, None)
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json.is_array());
+        assert!(json.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn query_with_language_filter() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_node(&make_node(
+                    "n1",
+                    "compute",
+                    "src/a.ts",
+                    NodeKind::Function,
+                    1,
+                    None,
+                ))
+                .unwrap();
+        }
+        let result = server
+            .codegraph_query("compute".to_string(), None, Some("python".to_string()))
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json.as_array().unwrap().is_empty(), "no Python nodes exist");
+    }
+
+    // -- codegraph_dependencies -------------------------------------------
+
+    #[tokio::test]
+    async fn dependencies_tool() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[
+                    make_node("n1", "main", "src/main.ts", NodeKind::Function, 1, None),
+                    make_node("n2", "dep1", "src/dep.ts", NodeKind::Function, 1, None),
+                ])
+                .unwrap();
+            store
+                .upsert_edge(&make_edge("n1", "n2", EdgeKind::Calls, "src/main.ts", 5))
+                .unwrap();
+        }
+        let result = server
+            .codegraph_dependencies("main".to_string(), None)
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["dependencyCount"].as_u64().unwrap() >= 1);
+    }
+
+    #[tokio::test]
+    async fn dependencies_not_found() {
+        let server = setup_server();
+        let result = server
+            .codegraph_dependencies("nonexistent".to_string(), None)
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["error"].is_string());
+    }
+
+    // -- codegraph_callers ------------------------------------------------
+
+    #[tokio::test]
+    async fn callers_tool() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[
+                    make_node("n1", "helper", "src/helper.ts", NodeKind::Function, 1, None),
+                    make_node("n2", "caller", "src/main.ts", NodeKind::Function, 1, None),
+                ])
+                .unwrap();
+            store
+                .upsert_edge(&make_edge("n2", "n1", EdgeKind::Calls, "src/main.ts", 5))
+                .unwrap();
+        }
+        let result = server.codegraph_callers("helper".to_string(), None).await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["callerCount"].as_u64().unwrap() >= 1);
+    }
+
+    #[tokio::test]
+    async fn callers_not_found() {
+        let server = setup_server();
+        let result = server
+            .codegraph_callers("nonexistent".to_string(), None)
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["error"].is_string());
+    }
+
+    // -- codegraph_impact -------------------------------------------------
+
+    #[tokio::test]
+    async fn impact_tool() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_nodes(&[
+                    make_node("n1", "core", "src/core.ts", NodeKind::Function, 1, None),
+                    make_node("n2", "user", "src/user.ts", NodeKind::Function, 1, None),
+                ])
+                .unwrap();
+            store
+                .upsert_edge(&make_edge("n2", "n1", EdgeKind::Calls, "src/user.ts", 5))
+                .unwrap();
+        }
+        let result = server
+            .codegraph_impact(None, Some("core".to_string()))
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["totalAffected"].is_number());
+        assert!(json["riskGroups"].is_array());
+    }
+
+    #[tokio::test]
+    async fn impact_not_found() {
+        let server = setup_server();
+        let result = server
+            .codegraph_impact(None, Some("nonexistent".to_string()))
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["error"].is_string());
+    }
+
+    // -- resolve_symbol ---------------------------------------------------
+
+    #[test]
+    fn resolve_symbol_by_name() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_node(&make_node(
+                    "n1",
+                    "myFunc",
+                    "src/a.ts",
+                    NodeKind::Function,
+                    1,
+                    None,
+                ))
+                .unwrap();
+        }
+        let node = server.resolve_symbol("myFunc");
+        assert!(node.is_some());
+        assert_eq!(node.unwrap().name, "myFunc");
+    }
+
+    #[test]
+    fn resolve_symbol_by_id() {
+        let server = setup_server();
+        {
+            let store = server.store.lock().unwrap();
+            store
+                .upsert_node(&make_node(
+                    "n1",
+                    "myFunc",
+                    "src/a.ts",
+                    NodeKind::Function,
+                    1,
+                    None,
+                ))
+                .unwrap();
+        }
+        let node = server.resolve_symbol("n1");
+        assert!(node.is_some());
+        assert_eq!(node.unwrap().id, "n1");
+    }
+
+    #[test]
+    fn resolve_symbol_not_found() {
+        let server = setup_server();
+        let node = server.resolve_symbol("nonexistent");
+        assert!(node.is_none());
+    }
+
+    // -- helper function tests --------------------------------------------
+
+    #[test]
+    fn mermaid_safe_escapes_special() {
+        let result = mermaid_safe("foo[bar](baz){qux}");
+        assert!(!result.contains('['));
+        assert!(!result.contains(']'));
+        assert!(!result.contains('('));
+        assert!(!result.contains(')'));
+    }
+
+    #[test]
+    fn mermaid_id_deterministic() {
+        let id1 = mermaid_id("node:test:1");
+        let id2 = mermaid_id("node:test:1");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn mermaid_id_different_inputs() {
+        let id1 = mermaid_id("alpha");
+        let id2 = mermaid_id("beta");
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn json_text_helper() {
+        let val = serde_json::json!({"key": "value"});
+        let result = json_text(&val);
+        assert!(result.contains("key"));
+        assert!(result.contains("value"));
     }
 }

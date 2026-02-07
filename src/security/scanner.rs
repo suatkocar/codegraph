@@ -139,11 +139,7 @@ pub fn scan_file(
 }
 
 /// Recursively scan a directory, loading bundled rules.
-pub fn scan_directory(
-    dir: &Path,
-    rules: &[SecurityRule],
-    exclude_tests: bool,
-) -> SecuritySummary {
+pub fn scan_directory(dir: &Path, rules: &[SecurityRule], exclude_tests: bool) -> SecuritySummary {
     let mut summary = SecuritySummary::new();
     summary.rules_applied = rules.len();
 
@@ -220,7 +216,10 @@ fn scan_dir_recursive(
 /// Scan for OWASP Top 10 issues only.
 pub fn check_owasp_top10(dir: &Path) -> SecuritySummary {
     let all_rules = load_bundled_rules();
-    let owasp_rules: Vec<_> = all_rules.into_iter().filter(|r| r.owasp.is_some()).collect();
+    let owasp_rules: Vec<_> = all_rules
+        .into_iter()
+        .filter(|r| r.owasp.is_some())
+        .collect();
     scan_directory(dir, &owasp_rules, true)
 }
 
@@ -233,17 +232,21 @@ pub fn check_cwe_top25(dir: &Path) -> SecuritySummary {
 
 /// Return a detailed explanation for a CWE ID.
 pub fn explain_vulnerability(cwe_id: &str) -> Option<VulnerabilityExplanation> {
-    CWE_EXPLANATIONS.iter().find(|e| e.0 == cwe_id).map(|e| {
-        VulnerabilityExplanation {
+    CWE_EXPLANATIONS
+        .iter()
+        .find(|e| e.0 == cwe_id)
+        .map(|e| VulnerabilityExplanation {
             cwe_id: e.0.to_string(),
             name: e.1.to_string(),
             description: e.2.to_string(),
             severity: e.3,
             impact: e.4.to_string(),
             remediation: e.5.to_string(),
-            references: vec![format!("https://cwe.mitre.org/data/definitions/{}.html", &cwe_id[4..])],
-        }
-    })
+            references: vec![format!(
+                "https://cwe.mitre.org/data/definitions/{}.html",
+                &cwe_id[4..]
+            )],
+        })
 }
 
 /// Suggest a fix string for a finding.
@@ -427,7 +430,12 @@ mod tests {
     use std::io::Write;
     use tempfile::TempDir;
 
-    fn make_rule(id: &str, pattern: &str, severity: Severity, category: RuleCategory) -> SecurityRule {
+    fn make_rule(
+        id: &str,
+        pattern: &str,
+        severity: Severity,
+        category: RuleCategory,
+    ) -> SecurityRule {
         SecurityRule {
             id: id.into(),
             name: id.into(),
@@ -446,7 +454,12 @@ mod tests {
 
     #[test]
     fn test_scan_file_finds_eval() {
-        let rules = vec![make_rule("R1", r"eval\(", Severity::High, RuleCategory::Injection)];
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
         let source = "x = eval(input())";
         let findings = scan_file(Path::new("test.py"), source, "python", &rules);
         assert_eq!(findings.len(), 1);
@@ -457,7 +470,12 @@ mod tests {
 
     #[test]
     fn test_scan_file_no_findings() {
-        let rules = vec![make_rule("R1", r"eval\(", Severity::High, RuleCategory::Injection)];
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
         let source = "safe_function()";
         let findings = scan_file(Path::new("test.py"), source, "python", &rules);
         assert!(findings.is_empty());
@@ -478,7 +496,12 @@ mod tests {
     fn test_scan_file_findings_sorted_by_severity() {
         let rules = vec![
             make_rule("R1", r"info_pattern", Severity::Info, RuleCategory::Other),
-            make_rule("R2", r"critical_pattern", Severity::Critical, RuleCategory::Injection),
+            make_rule(
+                "R2",
+                r"critical_pattern",
+                Severity::Critical,
+                RuleCategory::Injection,
+            ),
         ];
         let source = "info_pattern\ncritical_pattern";
         let findings = scan_file(Path::new("t.py"), source, "python", &rules);
@@ -495,7 +518,12 @@ mod tests {
         let mut f = std::fs::File::create(&file).unwrap();
         writeln!(f, "x = eval(input())").unwrap();
 
-        let rules = vec![make_rule("R1", r"eval\(", Severity::High, RuleCategory::Injection)];
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
         let summary = scan_directory(dir.path(), &rules, false);
         assert_eq!(summary.total_findings, 1);
         assert_eq!(summary.high, 1);
@@ -511,7 +539,12 @@ mod tests {
         let mut f = std::fs::File::create(&file).unwrap();
         writeln!(f, "eval(input())").unwrap();
 
-        let rules = vec![make_rule("R1", r"eval\(", Severity::High, RuleCategory::Injection)];
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
         let summary = scan_directory(dir.path(), &rules, true);
         assert_eq!(summary.total_findings, 0);
     }
@@ -525,7 +558,12 @@ mod tests {
         let mut f = std::fs::File::create(&file).unwrap();
         writeln!(f, "eval(input())").unwrap();
 
-        let rules = vec![make_rule("R1", r"eval\(", Severity::High, RuleCategory::Injection)];
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
         let summary = scan_directory(dir.path(), &rules, false);
         assert!(summary.total_findings >= 1);
     }
@@ -539,7 +577,12 @@ mod tests {
         let mut f = std::fs::File::create(&file).unwrap();
         writeln!(f, "eval(x)").unwrap();
 
-        let rules = vec![make_rule("R1", r"eval\(", Severity::High, RuleCategory::Injection)];
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
         let summary = scan_directory(dir.path(), &rules, false);
         assert_eq!(summary.total_findings, 0);
     }
@@ -553,7 +596,12 @@ mod tests {
             writeln!(f, "eval(x)").unwrap();
         }
 
-        let rules = vec![make_rule("R1", r"eval\(", Severity::High, RuleCategory::Injection)];
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
         let summary = scan_directory(dir.path(), &rules, false);
         assert_eq!(summary.total_findings, 3);
         assert_eq!(summary.files_scanned, 3);
@@ -562,7 +610,12 @@ mod tests {
     #[test]
     fn test_scan_directory_empty() {
         let dir = TempDir::new().unwrap();
-        let rules = vec![make_rule("R1", r"eval\(", Severity::High, RuleCategory::Injection)];
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
         let summary = scan_directory(dir.path(), &rules, false);
         assert_eq!(summary.total_findings, 0);
         assert_eq!(summary.files_scanned, 0);
@@ -574,14 +627,32 @@ mod tests {
     fn test_summary_severity_counts() {
         let mut summary = SecuritySummary::new();
         summary.add_finding(SecurityFinding {
-            rule_id: "R".into(), rule_name: "R".into(), severity: Severity::Critical,
-            file_path: "f".into(), line_number: 1, column: 1, matched_text: "x".into(),
-            message: "m".into(), fix: None, cwe: None, owasp: None, category: RuleCategory::Other,
+            rule_id: "R".into(),
+            rule_name: "R".into(),
+            severity: Severity::Critical,
+            file_path: "f".into(),
+            line_number: 1,
+            column: 1,
+            matched_text: "x".into(),
+            message: "m".into(),
+            fix: None,
+            cwe: None,
+            owasp: None,
+            category: RuleCategory::Other,
         });
         summary.add_finding(SecurityFinding {
-            rule_id: "R".into(), rule_name: "R".into(), severity: Severity::Low,
-            file_path: "f".into(), line_number: 2, column: 1, matched_text: "y".into(),
-            message: "m".into(), fix: None, cwe: None, owasp: None, category: RuleCategory::Other,
+            rule_id: "R".into(),
+            rule_name: "R".into(),
+            severity: Severity::Low,
+            file_path: "f".into(),
+            line_number: 2,
+            column: 1,
+            matched_text: "y".into(),
+            message: "m".into(),
+            fix: None,
+            cwe: None,
+            owasp: None,
+            category: RuleCategory::Other,
         });
         assert_eq!(summary.critical, 1);
         assert_eq!(summary.low, 1);
@@ -593,15 +664,33 @@ mod tests {
         let mut summary = SecuritySummary::new();
         for _ in 0..5 {
             summary.add_finding(SecurityFinding {
-                rule_id: "R1".into(), rule_name: "Frequent".into(), severity: Severity::Medium,
-                file_path: "f".into(), line_number: 1, column: 1, matched_text: "x".into(),
-                message: "m".into(), fix: None, cwe: None, owasp: None, category: RuleCategory::Other,
+                rule_id: "R1".into(),
+                rule_name: "Frequent".into(),
+                severity: Severity::Medium,
+                file_path: "f".into(),
+                line_number: 1,
+                column: 1,
+                matched_text: "x".into(),
+                message: "m".into(),
+                fix: None,
+                cwe: None,
+                owasp: None,
+                category: RuleCategory::Other,
             });
         }
         summary.add_finding(SecurityFinding {
-            rule_id: "R2".into(), rule_name: "Rare".into(), severity: Severity::Low,
-            file_path: "f".into(), line_number: 1, column: 1, matched_text: "y".into(),
-            message: "m".into(), fix: None, cwe: None, owasp: None, category: RuleCategory::Other,
+            rule_id: "R2".into(),
+            rule_name: "Rare".into(),
+            severity: Severity::Low,
+            file_path: "f".into(),
+            line_number: 1,
+            column: 1,
+            matched_text: "y".into(),
+            message: "m".into(),
+            fix: None,
+            cwe: None,
+            owasp: None,
+            category: RuleCategory::Other,
         });
         summary.finalize();
         assert_eq!(summary.top_issues[0].0, "Frequent");
@@ -627,7 +716,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let file = dir.path().join("app.py");
         let mut f = std::fs::File::create(&file).unwrap();
-        writeln!(f, "cursor.execute(\"SELECT * FROM users WHERE id=\" + user_id)").unwrap();
+        writeln!(
+            f,
+            "cursor.execute(\"SELECT * FROM users WHERE id=\" + user_id)"
+        )
+        .unwrap();
 
         let summary = check_cwe_top25(dir.path());
         assert!(summary.total_findings >= 1);
@@ -661,9 +754,8 @@ mod tests {
     #[test]
     fn test_explain_all_known_cwes() {
         let known = [
-            "CWE-79", "CWE-89", "CWE-78", "CWE-22", "CWE-327", "CWE-798",
-            "CWE-502", "CWE-20", "CWE-352", "CWE-787", "CWE-125", "CWE-416",
-            "CWE-94", "CWE-330", "CWE-611", "CWE-918",
+            "CWE-79", "CWE-89", "CWE-78", "CWE-22", "CWE-327", "CWE-798", "CWE-502", "CWE-20",
+            "CWE-352", "CWE-787", "CWE-125", "CWE-416", "CWE-94", "CWE-330", "CWE-611", "CWE-918",
         ];
         for cwe in &known {
             assert!(
@@ -679,10 +771,18 @@ mod tests {
     #[test]
     fn test_suggest_fix_with_rule_fix() {
         let finding = SecurityFinding {
-            rule_id: "R".into(), rule_name: "R".into(), severity: Severity::High,
-            file_path: "f".into(), line_number: 1, column: 1, matched_text: "x".into(),
-            message: "m".into(), fix: Some("specific fix".into()),
-            cwe: None, owasp: None, category: RuleCategory::Injection,
+            rule_id: "R".into(),
+            rule_name: "R".into(),
+            severity: Severity::High,
+            file_path: "f".into(),
+            line_number: 1,
+            column: 1,
+            matched_text: "x".into(),
+            message: "m".into(),
+            fix: Some("specific fix".into()),
+            cwe: None,
+            owasp: None,
+            category: RuleCategory::Injection,
         };
         assert_eq!(suggest_fix(&finding), "specific fix");
     }
@@ -701,15 +801,26 @@ mod tests {
         ];
         for (cat, expected_substr) in &categories {
             let finding = SecurityFinding {
-                rule_id: "R".into(), rule_name: "R".into(), severity: Severity::Medium,
-                file_path: "f".into(), line_number: 1, column: 1, matched_text: "x".into(),
-                message: "m".into(), fix: None, cwe: None, owasp: None, category: *cat,
+                rule_id: "R".into(),
+                rule_name: "R".into(),
+                severity: Severity::Medium,
+                file_path: "f".into(),
+                line_number: 1,
+                column: 1,
+                matched_text: "x".into(),
+                message: "m".into(),
+                fix: None,
+                cwe: None,
+                owasp: None,
+                category: *cat,
             };
             let fix = suggest_fix(&finding);
             assert!(
                 fix.to_lowercase().contains(&expected_substr.to_lowercase()),
                 "Fix for {:?} should contain '{}', got: {}",
-                cat, expected_substr, fix
+                cat,
+                expected_substr,
+                fix
             );
         }
     }
@@ -726,8 +837,9 @@ def get_user(username):
 "#;
         let findings = scan_file(Path::new("test.py"), source, "python", &rules);
         assert!(
-            findings.iter().any(|f| f.category == RuleCategory::Injection
-                || f.cwe.as_deref() == Some("CWE-89")),
+            findings.iter().any(
+                |f| f.category == RuleCategory::Injection || f.cwe.as_deref() == Some("CWE-89")
+            ),
             "Should detect SQL injection pattern"
         );
     }
@@ -738,8 +850,9 @@ def get_user(username):
         let source = "document.getElementById('output').innerHTML = userInput;";
         let findings = scan_file(Path::new("app.js"), source, "javascript", &rules);
         assert!(
-            findings.iter().any(|f| f.category == RuleCategory::Xss
-                || f.cwe.as_deref() == Some("CWE-79")),
+            findings
+                .iter()
+                .any(|f| f.category == RuleCategory::Xss || f.cwe.as_deref() == Some("CWE-79")),
             "Should detect XSS via innerHTML"
         );
     }
@@ -773,8 +886,9 @@ def get_user(username):
         let source = "import os\nos.system('rm -rf ' + user_input)";
         let findings = scan_file(Path::new("cmd.py"), source, "python", &rules);
         assert!(
-            findings.iter().any(|f| f.category == RuleCategory::Injection
-                || f.cwe.as_deref() == Some("CWE-78")),
+            findings.iter().any(
+                |f| f.category == RuleCategory::Injection || f.cwe.as_deref() == Some("CWE-78")
+            ),
             "Should detect command injection"
         );
     }
@@ -785,8 +899,10 @@ def get_user(username):
         let source = "import pickle\ndata = pickle.loads(user_data)";
         let findings = scan_file(Path::new("deser.py"), source, "python", &rules);
         assert!(
-            findings.iter().any(|f| f.category == RuleCategory::Deserialization
-                || f.cwe.as_deref() == Some("CWE-502")),
+            findings
+                .iter()
+                .any(|f| f.category == RuleCategory::Deserialization
+                    || f.cwe.as_deref() == Some("CWE-502")),
             "Should detect insecure deserialization"
         );
     }
@@ -796,10 +912,7 @@ def get_user(username):
         let rules = load_bundled_rules();
         let source = "AWS_KEY = \"FKIAEXAMPLEKEY000000\"";
         let findings = scan_file(Path::new("creds.py"), source, "python", &rules);
-        assert!(
-            !findings.is_empty(),
-            "Should detect AWS access key"
-        );
+        assert!(!findings.is_empty(), "Should detect AWS access key");
     }
 
     #[test]
@@ -823,7 +936,661 @@ def get_user(user_id: int):
 "#;
         let findings = scan_file(Path::new("safe.py"), source, "python", &rules);
         // Clean code should produce zero or very few low-severity findings.
-        let critical = findings.iter().filter(|f| f.severity >= Severity::High).count();
-        assert_eq!(critical, 0, "Clean code should not trigger high/critical findings");
+        let critical = findings
+            .iter()
+            .filter(|f| f.severity >= Severity::High)
+            .count();
+        assert_eq!(
+            critical, 0,
+            "Clean code should not trigger high/critical findings"
+        );
+    }
+
+    // ====================================================================
+    // Phase 18B — extended scanner tests
+    // ====================================================================
+
+    use pretty_assertions::assert_eq as pa_eq;
+    use test_case::test_case;
+
+    // --- scan_file: language-specific patterns ---
+
+    #[test]
+    fn test_scan_file_javascript_eval() {
+        let rules = load_bundled_rules();
+        let source = "var result = eval(userInput);";
+        let findings = scan_file(Path::new("evil.js"), source, "javascript", &rules);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.category == RuleCategory::Injection),
+            "should detect eval in JS"
+        );
+    }
+
+    #[test]
+    fn test_scan_file_php_sql_injection() {
+        let rules = load_bundled_rules();
+        let source = "mysql_query(\"SELECT * FROM users WHERE id=\" . $user_id);";
+        let findings = scan_file(Path::new("app.php"), source, "php", &rules);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.category == RuleCategory::Injection),
+            "should detect SQL injection in PHP"
+        );
+    }
+
+    #[test]
+    fn test_scan_file_java_sql_injection() {
+        let rules = load_bundled_rules();
+        let source = r#"stmt.executeQuery("SELECT * FROM users WHERE name = '" + name + "'");"#;
+        let findings = scan_file(Path::new("Dao.java"), source, "java", &rules);
+        assert!(!findings.is_empty(), "should detect SQL injection in Java");
+    }
+
+    #[test]
+    fn test_scan_file_c_buffer_overflow() {
+        let rules = load_bundled_rules();
+        let source = "gets(buffer);";
+        let findings = scan_file(Path::new("main.c"), source, "c", &rules);
+        assert!(!findings.is_empty(), "should detect gets() buffer overflow");
+    }
+
+    #[test]
+    fn test_scan_file_c_strcpy() {
+        let rules = load_bundled_rules();
+        let source = "strcpy(dest, user_input);";
+        let findings = scan_file(Path::new("str.c"), source, "c", &rules);
+        assert!(!findings.is_empty(), "should detect strcpy buffer overflow");
+    }
+
+    #[test]
+    fn test_scan_file_c_sprintf() {
+        let rules = load_bundled_rules();
+        let source = "sprintf(buf, \"%s%s\", a, b);";
+        let findings = scan_file(Path::new("fmt.c"), source, "c", &rules);
+        assert!(!findings.is_empty(), "should detect sprintf");
+    }
+
+    #[test]
+    fn test_scan_file_insecure_random_python() {
+        let rules = load_bundled_rules();
+        let source = "token = random.randint(0, 999999)";
+        let findings = scan_file(Path::new("auth.py"), source, "python", &rules);
+        assert!(
+            findings.iter().any(|f| f.category == RuleCategory::Crypto),
+            "should detect insecure random"
+        );
+    }
+
+    #[test]
+    fn test_scan_file_insecure_random_js() {
+        let rules = load_bundled_rules();
+        let source = "const token = Math.random();";
+        let findings = scan_file(Path::new("auth.js"), source, "javascript", &rules);
+        assert!(
+            findings.iter().any(|f| f.category == RuleCategory::Crypto),
+            "should detect Math.random"
+        );
+    }
+
+    #[test]
+    fn test_scan_file_github_token() {
+        let rules = load_bundled_rules();
+        let source = "const token = 'ghx_FAKE_TOKEN_FOR_TESTING_00000000000';";
+        let findings = scan_file(Path::new("config.js"), source, "javascript", &rules);
+        assert!(
+            findings.iter().any(|f| f.category == RuleCategory::Secrets),
+            "should detect GitHub token"
+        );
+    }
+
+    #[test]
+    fn test_scan_file_private_key() {
+        let rules = load_bundled_rules();
+        let source = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA...";
+        let findings = scan_file(Path::new("key.py"), source, "python", &rules);
+        assert!(
+            findings.iter().any(|f| f.category == RuleCategory::Secrets),
+            "should detect private key"
+        );
+    }
+
+    #[test]
+    fn test_scan_file_stripe_key() {
+        let rules = load_bundled_rules();
+        let source = "stripe_key = 'rk_skey_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789'";
+        let findings = scan_file(Path::new("pay.py"), source, "python", &rules);
+        assert!(!findings.is_empty(), "should detect Stripe live key");
+    }
+
+    #[test]
+    fn test_scan_file_db_connection_string() {
+        let rules = load_bundled_rules();
+        let source = "url = 'postgres://admin:hunter2@db.example.com/prod'";
+        let findings = scan_file(Path::new("db.py"), source, "python", &rules);
+        assert!(!findings.is_empty(), "should detect DB connection string");
+    }
+
+    #[test]
+    fn test_scan_file_cors_wildcard() {
+        let rules = load_bundled_rules();
+        let source = "CORS_ALLOW_ALL_ORIGINS = True";
+        let findings = scan_file(Path::new("settings.py"), source, "python", &rules);
+        assert!(
+            findings.iter().any(|f| f.category == RuleCategory::Config),
+            "should detect CORS wildcard"
+        );
+    }
+
+    #[test]
+    fn test_scan_file_tls_disabled() {
+        let rules = load_bundled_rules();
+        let source = "requests.get(url, verify=False)";
+        let findings = scan_file(Path::new("http.py"), source, "python", &rules);
+        assert!(
+            findings.iter().any(|f| f.category == RuleCategory::Crypto),
+            "should detect disabled TLS verification"
+        );
+    }
+
+    #[test]
+    fn test_scan_file_csrf_exempt() {
+        let rules = load_bundled_rules();
+        let source = "@csrf_exempt\ndef my_view(request):";
+        let findings = scan_file(Path::new("views.py"), source, "python", &rules);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.category == RuleCategory::Authentication),
+            "should detect CSRF exemption"
+        );
+    }
+
+    // --- scan_file: finding metadata ---
+
+    #[test]
+    fn test_scan_file_finding_has_fix() {
+        let rules = load_bundled_rules();
+        let source = "eval(code)";
+        let findings = scan_file(Path::new("t.py"), source, "python", &rules);
+        assert!(!findings.is_empty());
+        // At least one finding should have a fix suggestion
+        assert!(
+            findings.iter().any(|f| f.fix.is_some()),
+            "at least one finding should have a fix"
+        );
+    }
+
+    #[test]
+    fn test_scan_file_finding_has_cwe() {
+        let rules = load_bundled_rules();
+        let source = "os.system(cmd)";
+        let findings = scan_file(Path::new("t.py"), source, "python", &rules);
+        assert!(
+            findings.iter().any(|f| f.cwe.is_some()),
+            "should have CWE mapping"
+        );
+    }
+
+    #[test]
+    fn test_scan_file_finding_has_owasp() {
+        let rules = load_bundled_rules();
+        let source = "os.system(cmd)";
+        let findings = scan_file(Path::new("t.py"), source, "python", &rules);
+        assert!(
+            findings.iter().any(|f| f.owasp.is_some()),
+            "should have OWASP mapping"
+        );
+    }
+
+    // --- scan_directory extended ---
+
+    #[test]
+    fn test_scan_directory_skips_hidden_dirs() {
+        let dir = TempDir::new().unwrap();
+        let hidden = dir.path().join(".hidden");
+        std::fs::create_dir_all(&hidden).unwrap();
+        let file = hidden.join("vuln.py");
+        let mut f = std::fs::File::create(&file).unwrap();
+        writeln!(f, "eval(x)").unwrap();
+
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
+        let summary = scan_directory(dir.path(), &rules, false);
+        assert_eq!(summary.total_findings, 0, "should skip .hidden dir");
+    }
+
+    #[test]
+    fn test_scan_directory_skips_target_dir() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let file = target.join("vuln.py");
+        let mut f = std::fs::File::create(&file).unwrap();
+        writeln!(f, "eval(x)").unwrap();
+
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
+        let summary = scan_directory(dir.path(), &rules, false);
+        assert_eq!(summary.total_findings, 0, "should skip target dir");
+    }
+
+    #[test]
+    fn test_scan_directory_skips_vendor_dir() {
+        let dir = TempDir::new().unwrap();
+        let vendor = dir.path().join("vendor");
+        std::fs::create_dir_all(&vendor).unwrap();
+        let file = vendor.join("vuln.py");
+        let mut f = std::fs::File::create(&file).unwrap();
+        writeln!(f, "eval(x)").unwrap();
+
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
+        let summary = scan_directory(dir.path(), &rules, false);
+        assert_eq!(summary.total_findings, 0, "should skip vendor dir");
+    }
+
+    #[test]
+    fn test_scan_directory_skips_pycache() {
+        let dir = TempDir::new().unwrap();
+        let pc = dir.path().join("__pycache__");
+        std::fs::create_dir_all(&pc).unwrap();
+        let file = pc.join("vuln.py");
+        let mut f = std::fs::File::create(&file).unwrap();
+        writeln!(f, "eval(x)").unwrap();
+
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
+        let summary = scan_directory(dir.path(), &rules, false);
+        assert_eq!(summary.total_findings, 0, "should skip __pycache__");
+    }
+
+    #[test]
+    fn test_scan_directory_rules_applied_count() {
+        let dir = TempDir::new().unwrap();
+        let rules = vec![
+            make_rule("R1", r"eval\(", Severity::High, RuleCategory::Injection),
+            make_rule("R2", r"exec\(", Severity::High, RuleCategory::Injection),
+            make_rule(
+                "R3",
+                r"system\(",
+                Severity::Critical,
+                RuleCategory::Injection,
+            ),
+        ];
+        let summary = scan_directory(dir.path(), &rules, false);
+        pa_eq!(summary.rules_applied, 3);
+    }
+
+    #[test]
+    fn test_scan_directory_nonexistent_dir() {
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
+        let summary = scan_directory(Path::new("/nonexistent/path/xyz"), &rules, false);
+        pa_eq!(summary.total_findings, 0);
+        pa_eq!(summary.files_scanned, 0);
+    }
+
+    // --- SecuritySummary ---
+
+    #[test]
+    fn test_summary_all_severities() {
+        let mut summary = SecuritySummary::new();
+        let severities = [
+            Severity::Info,
+            Severity::Low,
+            Severity::Medium,
+            Severity::High,
+            Severity::Critical,
+        ];
+        for sev in &severities {
+            summary.add_finding(SecurityFinding {
+                rule_id: "R".into(),
+                rule_name: "R".into(),
+                severity: *sev,
+                file_path: "f".into(),
+                line_number: 1,
+                column: 1,
+                matched_text: "x".into(),
+                message: "m".into(),
+                fix: None,
+                cwe: None,
+                owasp: None,
+                category: RuleCategory::Other,
+            });
+        }
+        pa_eq!(summary.info, 1);
+        pa_eq!(summary.low, 1);
+        pa_eq!(summary.medium, 1);
+        pa_eq!(summary.high, 1);
+        pa_eq!(summary.critical, 1);
+        pa_eq!(summary.total_findings, 5);
+    }
+
+    #[test]
+    fn test_summary_finalize_sorts_by_severity() {
+        let mut summary = SecuritySummary::new();
+        summary.add_finding(SecurityFinding {
+            rule_id: "R".into(),
+            rule_name: "Low".into(),
+            severity: Severity::Low,
+            file_path: "f".into(),
+            line_number: 1,
+            column: 1,
+            matched_text: "x".into(),
+            message: "m".into(),
+            fix: None,
+            cwe: None,
+            owasp: None,
+            category: RuleCategory::Other,
+        });
+        summary.add_finding(SecurityFinding {
+            rule_id: "R".into(),
+            rule_name: "Crit".into(),
+            severity: Severity::Critical,
+            file_path: "f".into(),
+            line_number: 1,
+            column: 1,
+            matched_text: "x".into(),
+            message: "m".into(),
+            fix: None,
+            cwe: None,
+            owasp: None,
+            category: RuleCategory::Other,
+        });
+        summary.finalize();
+        pa_eq!(summary.findings[0].severity, Severity::Critical);
+        pa_eq!(summary.findings[1].severity, Severity::Low);
+    }
+
+    #[test]
+    fn test_summary_top_issues_limit_10() {
+        let mut summary = SecuritySummary::new();
+        for i in 0..15 {
+            summary.add_finding(SecurityFinding {
+                rule_id: format!("R{}", i),
+                rule_name: format!("Issue{}", i),
+                severity: Severity::Medium,
+                file_path: "f".into(),
+                line_number: 1,
+                column: 1,
+                matched_text: "x".into(),
+                message: "m".into(),
+                fix: None,
+                cwe: None,
+                owasp: None,
+                category: RuleCategory::Other,
+            });
+        }
+        summary.finalize();
+        assert!(
+            summary.top_issues.len() <= 10,
+            "top_issues should be capped at 10"
+        );
+    }
+
+    #[test]
+    fn test_summary_empty_finalize() {
+        let mut summary = SecuritySummary::new();
+        summary.finalize();
+        assert!(summary.top_issues.is_empty());
+        assert!(summary.findings.is_empty());
+    }
+
+    // --- check_owasp_top10 extended ---
+
+    #[test]
+    fn test_check_owasp_empty_dir() {
+        let dir = TempDir::new().unwrap();
+        let summary = check_owasp_top10(dir.path());
+        pa_eq!(summary.total_findings, 0);
+    }
+
+    #[test]
+    fn test_check_owasp_xss() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("xss.js");
+        std::fs::write(&file, "element.innerHTML = userInput;").unwrap();
+        let summary = check_owasp_top10(dir.path());
+        assert!(
+            summary.total_findings >= 1,
+            "should detect XSS via OWASP rules"
+        );
+    }
+
+    // --- check_cwe_top25 extended ---
+
+    #[test]
+    fn test_check_cwe_empty_dir() {
+        let dir = TempDir::new().unwrap();
+        let summary = check_cwe_top25(dir.path());
+        pa_eq!(summary.total_findings, 0);
+    }
+
+    #[test]
+    fn test_check_cwe_buffer_overflow() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("vuln.c");
+        std::fs::write(&file, "gets(buffer);").unwrap();
+        let summary = check_cwe_top25(dir.path());
+        assert!(
+            summary.total_findings >= 1,
+            "should detect gets() via CWE rules"
+        );
+    }
+
+    // --- explain_vulnerability extended ---
+
+    #[test_case("CWE-79", "XSS" ; "xss explanation")]
+    #[test_case("CWE-89", "SQL" ; "sql injection explanation")]
+    #[test_case("CWE-78", "Command" ; "command injection explanation")]
+    #[test_case("CWE-22", "Path" ; "path traversal explanation")]
+    #[test_case("CWE-327", "Cryptographic" ; "weak crypto explanation")]
+    #[test_case("CWE-798", "Credential" ; "hardcoded creds explanation")]
+    #[test_case("CWE-502", "Deserialization" ; "deserialization explanation")]
+    #[test_case("CWE-94", "Code" ; "code injection explanation")]
+    #[test_case("CWE-918", "SSRF" ; "ssrf explanation")]
+    fn explain_known_cwe(cwe_id: &str, expected_substr: &str) {
+        let expl = explain_vulnerability(cwe_id).unwrap();
+        pa_eq!(expl.cwe_id, cwe_id);
+        assert!(
+            expl.name.contains(expected_substr) || expl.description.contains(expected_substr),
+            "explanation for {} should mention '{}'",
+            cwe_id,
+            expected_substr
+        );
+        assert!(!expl.remediation.is_empty());
+        assert!(!expl.references.is_empty());
+    }
+
+    #[test]
+    fn explain_vulnerability_reference_url_format() {
+        let expl = explain_vulnerability("CWE-89").unwrap();
+        assert!(expl.references[0].starts_with("https://cwe.mitre.org/"));
+        assert!(expl.references[0].contains("89"));
+    }
+
+    #[test]
+    fn explain_vulnerability_all_have_impact() {
+        let known = [
+            "CWE-79", "CWE-89", "CWE-78", "CWE-22", "CWE-327", "CWE-798", "CWE-502", "CWE-20",
+            "CWE-352", "CWE-787", "CWE-125", "CWE-416", "CWE-94", "CWE-330", "CWE-611", "CWE-918",
+        ];
+        for cwe in &known {
+            let expl = explain_vulnerability(cwe).unwrap();
+            assert!(!expl.impact.is_empty(), "{} missing impact", cwe);
+        }
+    }
+
+    // --- suggest_fix extended ---
+
+    #[test_case(RuleCategory::Injection, "parameterized" ; "injection fix")]
+    #[test_case(RuleCategory::Crypto, "AES" ; "crypto fix")]
+    #[test_case(RuleCategory::Secrets, "environment" ; "secrets fix")]
+    #[test_case(RuleCategory::Xss, "Sanitize" ; "xss fix")]
+    #[test_case(RuleCategory::PathTraversal, "canonicalize" ; "path traversal fix")]
+    #[test_case(RuleCategory::Deserialization, "safe" ; "deserialization fix")]
+    #[test_case(RuleCategory::Authentication, "authentication" ; "auth fix")]
+    #[test_case(RuleCategory::Config, "debug" ; "config fix")]
+    fn suggest_fix_by_category_contains(cat: RuleCategory, expected: &str) {
+        let finding = SecurityFinding {
+            rule_id: "R".into(),
+            rule_name: "R".into(),
+            severity: Severity::Medium,
+            file_path: "f".into(),
+            line_number: 1,
+            column: 1,
+            matched_text: "x".into(),
+            message: "fallback msg".into(),
+            fix: None,
+            cwe: None,
+            owasp: None,
+            category: cat,
+        };
+        let fix = suggest_fix(&finding);
+        assert!(
+            fix.to_lowercase().contains(&expected.to_lowercase()),
+            "fix for {:?} should contain '{}', got: {}",
+            cat,
+            expected,
+            fix
+        );
+    }
+
+    #[test]
+    fn suggest_fix_other_category_returns_message() {
+        let finding = SecurityFinding {
+            rule_id: "R".into(),
+            rule_name: "R".into(),
+            severity: Severity::Low,
+            file_path: "f".into(),
+            line_number: 1,
+            column: 1,
+            matched_text: "x".into(),
+            message: "my custom message".into(),
+            fix: None,
+            cwe: None,
+            owasp: None,
+            category: RuleCategory::Other,
+        };
+        pa_eq!(suggest_fix(&finding), "my custom message");
+    }
+
+    #[test]
+    fn suggest_fix_prefers_rule_fix_over_category() {
+        let finding = SecurityFinding {
+            rule_id: "R".into(),
+            rule_name: "R".into(),
+            severity: Severity::High,
+            file_path: "f".into(),
+            line_number: 1,
+            column: 1,
+            matched_text: "x".into(),
+            message: "m".into(),
+            fix: Some("use prepared statements".into()),
+            cwe: None,
+            owasp: None,
+            category: RuleCategory::Injection,
+        };
+        pa_eq!(suggest_fix(&finding), "use prepared statements");
+    }
+
+    // --- scan_directory with mixed file types ---
+
+    #[test]
+    fn test_scan_directory_mixed_languages() {
+        let dir = TempDir::new().unwrap();
+
+        // Python file with eval
+        let py = dir.path().join("vuln.py");
+        std::fs::write(&py, "eval(x)").unwrap();
+
+        // JS file with innerHTML
+        let js = dir.path().join("xss.js");
+        std::fs::write(&js, "el.innerHTML = data;").unwrap();
+
+        // C file with gets
+        let c = dir.path().join("buf.c");
+        std::fs::write(&c, "gets(buffer);").unwrap();
+
+        let rules = load_bundled_rules();
+        let summary = scan_directory(dir.path(), &rules, false);
+        assert!(summary.files_scanned >= 3, "should scan all 3 files");
+        assert!(
+            summary.total_findings >= 3,
+            "should find issues in all 3 files"
+        );
+    }
+
+    #[test]
+    fn test_scan_directory_ignores_non_code_files() {
+        let dir = TempDir::new().unwrap();
+        let txt = dir.path().join("readme.txt");
+        std::fs::write(&txt, "eval(x)").unwrap();
+        let md = dir.path().join("notes.md");
+        std::fs::write(&md, "eval(x)").unwrap();
+
+        let rules = vec![make_rule(
+            "R1",
+            r"eval\(",
+            Severity::High,
+            RuleCategory::Injection,
+        )];
+        let summary = scan_directory(dir.path(), &rules, false);
+        pa_eq!(
+            summary.files_scanned,
+            0,
+            "should not scan .txt or .md files"
+        );
+    }
+
+    // --- Scan with bundled rules: clean project ---
+
+    #[test]
+    fn test_scan_clean_python_project() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("clean.py");
+        std::fs::write(
+            &file,
+            r#"
+import json
+
+def process(data: dict) -> str:
+    """Safely process data."""
+    return json.dumps(data, indent=2)
+"#,
+        )
+        .unwrap();
+
+        let rules = load_bundled_rules();
+        let summary = scan_directory(dir.path(), &rules, false);
+        let high_critical = summary.critical + summary.high;
+        pa_eq!(
+            high_critical,
+            0,
+            "clean code should not trigger high/critical findings"
+        );
     }
 }

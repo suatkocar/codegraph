@@ -831,4 +831,316 @@ mod tests {
         // Max single-list RRF for rank 0 is 1/61 ~ 0.016, well below 1.0.
         assert!(results.is_empty());
     }
+
+    // =====================================================================
+    // NEW TESTS: Phase 18C — Search comprehensive coverage
+    // =====================================================================
+
+    #[test]
+    fn keyword_search_multiple_matches() {
+        let store = setup();
+        // Insert 5 nodes that all share the exact word "dispatch" in their name.
+        for i in 0..5 {
+            store
+                .upsert_node(&make_node(
+                    &format!("fn:a.ts:dispatch{}:{}", i, i),
+                    "dispatch",
+                    &format!("src/file{}.ts", i),
+                    NodeKind::Function,
+                    i * 10,
+                    Some(&format!("function dispatch(arg{})", i)),
+                    None,
+                ))
+                .unwrap();
+        }
+
+        let search = HybridSearch::new(&store.conn);
+        let results = search.search_by_keyword("dispatch", 10).unwrap();
+        assert_eq!(results.len(), 5);
+    }
+
+    #[test]
+    fn keyword_search_empty_query_returns_empty() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "fn:a.ts:greet:1",
+                "greet",
+                "a.ts",
+                NodeKind::Function,
+                1,
+                None,
+                None,
+            ))
+            .unwrap();
+
+        let search = HybridSearch::new(&store.conn);
+        let results = search.search_by_keyword("", 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn keyword_search_whitespace_query_returns_empty() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "fn:a.ts:greet:1",
+                "greet",
+                "a.ts",
+                NodeKind::Function,
+                1,
+                None,
+                None,
+            ))
+            .unwrap();
+
+        let search = HybridSearch::new(&store.conn);
+        let results = search.search_by_keyword("   ", 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn fts_search_matches_doc_comment() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "fn:a.ts:calc:1",
+                "calc",
+                "a.ts",
+                NodeKind::Function,
+                1,
+                Some("function calc(x: number)"),
+                Some("Calculate the fibonacci number"),
+            ))
+            .unwrap();
+
+        let search = HybridSearch::new(&store.conn);
+        let results = search.search_by_keyword("fibonacci", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "calc");
+    }
+
+    #[test]
+    fn fts_search_matches_signature() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "fn:a.ts:processOrder:1",
+                "processOrder",
+                "a.ts",
+                NodeKind::Function,
+                1,
+                Some("function processOrder(order: Order): Promise<void>"),
+                None,
+            ))
+            .unwrap();
+
+        let search = HybridSearch::new(&store.conn);
+        let results = search.search_by_keyword("processOrder", 10).unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn hybrid_search_default_limit() {
+        let store = setup();
+        for i in 0..30 {
+            store
+                .upsert_node(&make_node(
+                    &format!("fn:a.ts:item{}:{}", i, i),
+                    &format!("item{}", i),
+                    "a.ts",
+                    NodeKind::Function,
+                    i,
+                    Some(&format!("function item{}()", i)),
+                    None,
+                ))
+                .unwrap();
+        }
+
+        let search = HybridSearch::new(&store.conn);
+        let opts = SearchOptions::default();
+        let results = search.search("item", &opts).unwrap();
+        // Default limit is 20
+        assert!(results.len() <= 20);
+    }
+
+    #[test]
+    fn hybrid_search_applies_limit() {
+        let store = setup();
+        for i in 0..10 {
+            store
+                .upsert_node(&make_node(
+                    &format!("fn:a.ts:data{}:{}", i, i),
+                    &format!("data{}", i),
+                    "a.ts",
+                    NodeKind::Function,
+                    i,
+                    Some(&format!("function data{}()", i)),
+                    None,
+                ))
+                .unwrap();
+        }
+
+        let search = HybridSearch::new(&store.conn);
+        let opts = SearchOptions {
+            limit: Some(3),
+            ..Default::default()
+        };
+        let results = search.search("data", &opts).unwrap();
+        assert!(results.len() <= 3);
+    }
+
+    #[test]
+    fn fuse_results_with_k_parameter() {
+        let fts = vec![SearchResult {
+            node_id: "a".to_string(),
+            name: "a".to_string(),
+            kind: "function".to_string(),
+            file_path: "a.ts".to_string(),
+            score: 0.0,
+            fts_score: Some(5.0),
+            vec_score: None,
+            snippet: None,
+        }];
+
+        // With k=10, rank 0 -> 1/(10+1) = 1/11
+        let fused10 = fuse_results(&fts, &[], 10);
+        let expected10 = 1.0 / 11.0;
+        assert!((fused10[0].score - expected10).abs() < 1e-10);
+
+        // With k=100, rank 0 -> 1/(100+1) = 1/101
+        let fused100 = fuse_results(&fts, &[], 100);
+        let expected100 = 1.0 / 101.0;
+        assert!((fused100[0].score - expected100).abs() < 1e-10);
+    }
+
+    #[test]
+    fn sanitize_fts_query_preserves_alphanumeric() {
+        let result = sanitize_fts_query("abc123");
+        assert_eq!(result, r#""abc123""#);
+    }
+
+    #[test]
+    fn sanitize_fts_query_preserves_hyphens() {
+        let result = sanitize_fts_query("my-function");
+        assert_eq!(result, r#""my-function""#);
+    }
+
+    #[test]
+    fn sanitize_fts_query_multiple_special_chars() {
+        let result = sanitize_fts_query("[test] (value) {object}");
+        assert_eq!(result, r#""test" OR "value" OR "object""#);
+    }
+
+    #[test]
+    fn build_snippet_empty_doc_with_signature() {
+        let snippet = build_snippet("foo", Some("fn foo()"), Some(""));
+        // Empty doc string falls through to signature
+        assert_eq!(snippet, "fn foo()");
+    }
+
+    #[test]
+    fn search_result_scores_descending() {
+        let fts: Vec<SearchResult> = (0..5)
+            .map(|i| SearchResult {
+                node_id: format!("n{}", i),
+                name: format!("name{}", i),
+                kind: "function".to_string(),
+                file_path: "f.ts".to_string(),
+                score: 0.0,
+                fts_score: Some((5 - i) as f64),
+                vec_score: None,
+                snippet: None,
+            })
+            .collect();
+
+        let fused = fuse_results(&fts, &[], 60);
+        for i in 1..fused.len() {
+            assert!(
+                fused[i].score <= fused[i - 1].score,
+                "scores should be descending"
+            );
+        }
+    }
+
+    #[test]
+    fn hybrid_search_combined_filters() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "fn:a.ts:compute:1",
+                "compute",
+                "a.ts",
+                NodeKind::Function,
+                1,
+                Some("function compute()"),
+                None,
+            ))
+            .unwrap();
+        store
+            .upsert_node(&make_node(
+                "cls:b.ts:Computer:1",
+                "Computer",
+                "b.ts",
+                NodeKind::Class,
+                1,
+                Some("class Computer"),
+                None,
+            ))
+            .unwrap();
+
+        let search = HybridSearch::new(&store.conn);
+        let opts = SearchOptions {
+            node_type: Some("function".to_string()),
+            language: Some("typescript".to_string()),
+            ..Default::default()
+        };
+        let results = search.search("comput", &opts).unwrap();
+        assert!(results.iter().all(|r| r.kind == "function"));
+    }
+
+    #[test]
+    fn search_by_similarity_returns_empty_without_embeddings() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "fn:a.ts:greet:1",
+                "greet",
+                "a.ts",
+                NodeKind::Function,
+                1,
+                None,
+                None,
+            ))
+            .unwrap();
+
+        let search = HybridSearch::new(&store.conn);
+        let results = search.search_by_similarity("hello", 10);
+        // Without the embedding feature, this always returns empty
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn hybrid_search_min_score_zero_keeps_all() {
+        let store = setup();
+        store
+            .upsert_node(&make_node(
+                "fn:a.ts:foo:1",
+                "foo",
+                "a.ts",
+                NodeKind::Function,
+                1,
+                None,
+                None,
+            ))
+            .unwrap();
+
+        let search = HybridSearch::new(&store.conn);
+        let opts = SearchOptions {
+            min_score: Some(0.0),
+            ..Default::default()
+        };
+        let results = search.search("foo", &opts).unwrap();
+        assert_eq!(results.len(), 1);
+    }
 }

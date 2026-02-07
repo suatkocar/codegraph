@@ -677,4 +677,374 @@ mod tests {
             result[0].score
         );
     }
+
+    // =====================================================================
+    // NEW TESTS: Phase 18C — Ranking comprehensive coverage
+    // =====================================================================
+
+    // -- PageRank on linear chain -----------------------------------------
+
+    fn seed_linear_chain(store: &GraphStore) {
+        store
+            .upsert_nodes(&[
+                make_node("a", "alpha", "a.ts", NodeKind::Function, 1),
+                make_node("b", "beta", "b.ts", NodeKind::Function, 1),
+                make_node("c", "gamma", "c.ts", NodeKind::Function, 1),
+                make_node("d", "delta", "d.ts", NodeKind::Function, 1),
+            ])
+            .unwrap();
+        store
+            .upsert_edges(&[
+                make_edge("a", "b", EdgeKind::Calls, "a.ts", 2),
+                make_edge("b", "c", EdgeKind::Calls, "b.ts", 2),
+                make_edge("c", "d", EdgeKind::Calls, "c.ts", 2),
+            ])
+            .unwrap();
+    }
+
+    #[test]
+    fn page_rank_linear_chain_sink_highest() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let ranking = GraphRanking::new(&store);
+
+        let result = ranking.compute_page_rank(0.85, 100);
+        assert_eq!(result.len(), 4);
+
+        // d is the ultimate sink, should rank highest
+        assert_eq!(result[0].node_id, "d");
+    }
+
+    #[test]
+    fn page_rank_linear_chain_sums_to_one() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let ranking = GraphRanking::new(&store);
+
+        let result = ranking.compute_page_rank(0.85, 100);
+        let total: f64 = result.iter().map(|r| r.score).sum();
+        assert!((total - 1.0).abs() < 1e-6);
+    }
+
+    // -- PageRank on star graph -------------------------------------------
+
+    #[test]
+    fn page_rank_star_graph_hub_lowest() {
+        let store = setup();
+        // Hub calls 5 spokes, hub has no incoming
+        let mut nodes = vec![make_node("hub", "hub", "hub.ts", NodeKind::Function, 1)];
+        let mut edges = Vec::new();
+        for i in 0..5 {
+            let id = format!("s{}", i);
+            nodes.push(make_node(
+                &id,
+                &format!("spoke{}", i),
+                &format!("{}.ts", id),
+                NodeKind::Function,
+                1,
+            ));
+            edges.push(make_edge("hub", &id, EdgeKind::Calls, "hub.ts", i + 2));
+        }
+        store.upsert_nodes(&nodes).unwrap();
+        store.upsert_edges(&edges).unwrap();
+
+        let ranking = GraphRanking::new(&store);
+        let result = ranking.compute_page_rank(0.85, 100);
+
+        // Hub sends all its rank out but receives none (except teleportation)
+        // so it should have the lowest score
+        assert_eq!(result.last().unwrap().node_id, "hub");
+    }
+
+    #[test]
+    fn page_rank_star_graph_spokes_equal() {
+        let store = setup();
+        let mut nodes = vec![make_node("hub", "hub", "hub.ts", NodeKind::Function, 1)];
+        let mut edges = Vec::new();
+        for i in 0..5 {
+            let id = format!("s{}", i);
+            nodes.push(make_node(
+                &id,
+                &format!("spoke{}", i),
+                &format!("{}.ts", id),
+                NodeKind::Function,
+                1,
+            ));
+            edges.push(make_edge("hub", &id, EdgeKind::Calls, "hub.ts", i + 2));
+        }
+        store.upsert_nodes(&nodes).unwrap();
+        store.upsert_edges(&edges).unwrap();
+
+        let ranking = GraphRanking::new(&store);
+        let result = ranking.compute_page_rank(0.85, 100);
+
+        // All 5 spokes receive equal share from hub, so they should have equal scores
+        let spoke_scores: Vec<f64> = result
+            .iter()
+            .filter(|r| r.node_id != "hub")
+            .map(|r| r.score)
+            .collect();
+        for i in 1..spoke_scores.len() {
+            assert!(
+                (spoke_scores[i] - spoke_scores[0]).abs() < 1e-6,
+                "all spokes should have equal PageRank"
+            );
+        }
+    }
+
+    // -- PageRank iterations effect ---------------------------------------
+
+    #[test]
+    fn page_rank_converges_with_more_iterations() {
+        let store = setup();
+        seed_diamond(&store);
+        let ranking = GraphRanking::new(&store);
+
+        let result_10 = ranking.compute_page_rank(0.85, 10);
+        let result_100 = ranking.compute_page_rank(0.85, 100);
+
+        // Both should sum to 1.0
+        let sum_10: f64 = result_10.iter().map(|r| r.score).sum();
+        let sum_100: f64 = result_100.iter().map(|r| r.score).sum();
+        assert!((sum_10 - 1.0).abs() < 1e-4);
+        assert!((sum_100 - 1.0).abs() < 1e-6);
+    }
+
+    // -- PageRank damping factor effect -----------------------------------
+
+    #[test]
+    fn page_rank_zero_damping_is_uniform() {
+        let store = setup();
+        seed_diamond(&store);
+        let ranking = GraphRanking::new(&store);
+
+        let result = ranking.compute_page_rank(0.0, 50);
+        // With damping=0, all scores are (1-0)/N = 1/N = 0.25 for 4 nodes
+        for r in &result {
+            assert!(
+                (r.score - 0.25).abs() < 1e-6,
+                "with damping=0, all nodes should have score 1/N, got {}",
+                r.score
+            );
+        }
+    }
+
+    // -- PPR: reaches only reachable nodes --------------------------------
+
+    #[test]
+    fn ppr_from_leaf_node() {
+        let store = setup();
+        seed_linear_chain(&store); // a -> b -> c -> d
+        let ranking = GraphRanking::new(&store);
+
+        // PPR from "d" - d is a dangling node, all mass teleports back to d
+        let result = ranking.personalized_page_rank("d", 0.85, 100);
+        assert!(result[0].node_id == "d");
+        assert!(result[0].score > 0.5, "query node should dominate");
+    }
+
+    #[test]
+    fn ppr_scores_decrease_with_distance() {
+        let store = setup();
+        seed_linear_chain(&store);
+        let ranking = GraphRanking::new(&store);
+
+        let result = ranking.personalized_page_rank("a", 0.85, 100);
+        let score_map: HashMap<&str, f64> = result
+            .iter()
+            .map(|r| (r.node_id.as_str(), r.score))
+            .collect();
+
+        // a should have highest score, then b, c, d (farther = lower)
+        assert!(score_map["a"] > score_map["b"]);
+        assert!(score_map["b"] > score_map["c"]);
+        assert!(score_map["c"] > score_map["d"]);
+    }
+
+    // -- Impact analysis: various topologies ------------------------------
+
+    #[test]
+    fn impact_on_mid_chain_node() {
+        let store = setup();
+        seed_linear_chain(&store); // a -> b -> c -> d
+        let ranking = GraphRanking::new(&store);
+
+        let impact = ranking.compute_impact("c");
+        assert_eq!(impact.direct_dependents, 1); // b depends on c
+        assert!(impact.transitive_dependents >= 1); // b (and possibly a)
+    }
+
+    #[test]
+    fn impact_on_highly_depended_node() {
+        let store = setup();
+        // Create a utility function that many nodes depend on
+        let mut nodes = vec![make_node("util", "util", "util.ts", NodeKind::Function, 1)];
+        let mut edges = Vec::new();
+        for i in 0..10 {
+            let id = format!("caller{}", i);
+            nodes.push(make_node(
+                &id,
+                &format!("caller{}", i),
+                &format!("c{}.ts", i),
+                NodeKind::Function,
+                1,
+            ));
+            edges.push(make_edge(
+                &id,
+                "util",
+                EdgeKind::Calls,
+                &format!("c{}.ts", i),
+                5,
+            ));
+        }
+        store.upsert_nodes(&nodes).unwrap();
+        store.upsert_edges(&edges).unwrap();
+
+        let ranking = GraphRanking::new(&store);
+        let impact = ranking.compute_impact("util");
+        assert_eq!(impact.direct_dependents, 10);
+        assert_eq!(impact.transitive_dependents, 10);
+        assert_eq!(impact.affected_files.len(), 10);
+        assert_eq!(impact.risk, RiskLevel::Medium); // 10 > 5 but <= 20
+    }
+
+    #[test]
+    fn impact_risk_high_threshold() {
+        let store = setup();
+        let mut nodes = vec![make_node("core", "core", "core.ts", NodeKind::Function, 1)];
+        let mut edges = Vec::new();
+        for i in 0..25 {
+            let id = format!("d{}", i);
+            nodes.push(make_node(
+                &id,
+                &format!("dep{}", i),
+                &format!("d{}.ts", i),
+                NodeKind::Function,
+                1,
+            ));
+            edges.push(make_edge(
+                &id,
+                "core",
+                EdgeKind::Calls,
+                &format!("d{}.ts", i),
+                5,
+            ));
+        }
+        store.upsert_nodes(&nodes).unwrap();
+        store.upsert_edges(&edges).unwrap();
+
+        let ranking = GraphRanking::new(&store);
+        let impact = ranking.compute_impact("core");
+        assert_eq!(impact.risk, RiskLevel::High); // 25 > 20 but <= 50
+    }
+
+    #[test]
+    fn impact_risk_critical_threshold() {
+        let store = setup();
+        let mut nodes = vec![make_node("base", "base", "base.ts", NodeKind::Function, 1)];
+        let mut edges = Vec::new();
+        for i in 0..55 {
+            let id = format!("u{}", i);
+            nodes.push(make_node(
+                &id,
+                &format!("user{}", i),
+                &format!("u{}.ts", i),
+                NodeKind::Function,
+                1,
+            ));
+            edges.push(make_edge(
+                &id,
+                "base",
+                EdgeKind::Calls,
+                &format!("u{}.ts", i),
+                5,
+            ));
+        }
+        store.upsert_nodes(&nodes).unwrap();
+        store.upsert_edges(&edges).unwrap();
+
+        let ranking = GraphRanking::new(&store);
+        let impact = ranking.compute_impact("base");
+        assert_eq!(impact.risk, RiskLevel::Critical); // 55 > 50
+    }
+
+    #[test]
+    fn impact_nonexistent_node() {
+        let store = setup();
+        seed_diamond(&store);
+        let ranking = GraphRanking::new(&store);
+
+        let impact = ranking.compute_impact("nonexistent");
+        assert_eq!(impact.direct_dependents, 0);
+        assert_eq!(impact.transitive_dependents, 0);
+        assert!(impact.affected_files.is_empty());
+        assert_eq!(impact.risk, RiskLevel::Low);
+    }
+
+    #[test]
+    fn impact_affected_files_are_sorted() {
+        let store = setup();
+        seed_diamond(&store);
+        let ranking = GraphRanking::new(&store);
+
+        let impact = ranking.compute_impact("D");
+        let files = &impact.affected_files;
+        for i in 1..files.len() {
+            assert!(files[i] >= files[i - 1], "affected files should be sorted");
+        }
+    }
+
+    // -- PageRank on two-node mutual cycle --------------------------------
+
+    #[test]
+    fn page_rank_mutual_cycle() {
+        let store = setup();
+        store
+            .upsert_nodes(&[
+                make_node("x", "ex", "x.ts", NodeKind::Function, 1),
+                make_node("y", "why", "y.ts", NodeKind::Function, 1),
+            ])
+            .unwrap();
+        store
+            .upsert_edges(&[
+                make_edge("x", "y", EdgeKind::Calls, "x.ts", 2),
+                make_edge("y", "x", EdgeKind::Calls, "y.ts", 2),
+            ])
+            .unwrap();
+
+        let ranking = GraphRanking::new(&store);
+        let result = ranking.compute_page_rank(0.85, 100);
+
+        // Symmetric cycle: both nodes should have equal PageRank
+        assert_eq!(result.len(), 2);
+        assert!(
+            (result[0].score - result[1].score).abs() < 1e-6,
+            "symmetric cycle should give equal scores"
+        );
+        assert!((result[0].score - 0.5).abs() < 1e-6);
+    }
+
+    // -- PPR on empty graph -----------------------------------------------
+
+    #[test]
+    fn ppr_empty_graph() {
+        let store = setup();
+        let ranking = GraphRanking::new(&store);
+        let result = ranking.personalized_page_rank("any", 0.85, 50);
+        assert!(result.is_empty());
+    }
+
+    // -- PageRank: all scores positive ------------------------------------
+
+    #[test]
+    fn page_rank_all_scores_positive() {
+        let store = setup();
+        seed_diamond(&store);
+        let ranking = GraphRanking::new(&store);
+
+        let result = ranking.compute_page_rank(0.85, 100);
+        for r in &result {
+            assert!(r.score > 0.0, "all PageRank scores should be positive");
+        }
+    }
 }

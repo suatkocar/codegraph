@@ -179,7 +179,7 @@ pub struct CategoryConfig {
 // ---------------------------------------------------------------------------
 
 /// Performance tuning knobs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PerformanceConfig {
     /// Maximum number of tools to expose to the MCP client.
     /// Tools beyond this limit are dropped (lowest-priority first).
@@ -189,15 +189,6 @@ pub struct PerformanceConfig {
     /// Whether to exclude test files from indexing.
     #[serde(default)]
     pub exclude_tests: bool,
-}
-
-impl Default for PerformanceConfig {
-    fn default() -> Self {
-        Self {
-            max_tool_count: None,
-            exclude_tests: false,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -261,16 +252,32 @@ mod tests {
             PresetName::SecurityFocused,
         ] {
             let s = preset.as_str();
-            assert_eq!(PresetName::from_str_loose(s), Some(preset), "roundtrip failed for {s}");
+            assert_eq!(
+                PresetName::from_str_loose(s),
+                Some(preset),
+                "roundtrip failed for {s}"
+            );
         }
     }
 
     #[test]
     fn test_preset_name_loose_parsing() {
-        assert_eq!(PresetName::from_str_loose("MINIMAL"), Some(PresetName::Minimal));
-        assert_eq!(PresetName::from_str_loose("  balanced  "), Some(PresetName::Balanced));
-        assert_eq!(PresetName::from_str_loose("security_focused"), Some(PresetName::SecurityFocused));
-        assert_eq!(PresetName::from_str_loose("securityfocused"), Some(PresetName::SecurityFocused));
+        assert_eq!(
+            PresetName::from_str_loose("MINIMAL"),
+            Some(PresetName::Minimal)
+        );
+        assert_eq!(
+            PresetName::from_str_loose("  balanced  "),
+            Some(PresetName::Balanced)
+        );
+        assert_eq!(
+            PresetName::from_str_loose("security_focused"),
+            Some(PresetName::SecurityFocused)
+        );
+        assert_eq!(
+            PresetName::from_str_loose("securityfocused"),
+            Some(PresetName::SecurityFocused)
+        );
         assert_eq!(PresetName::from_str_loose("unknown"), None);
         assert_eq!(PresetName::from_str_loose(""), None);
     }
@@ -279,7 +286,10 @@ mod tests {
     fn test_preset_name_display() {
         assert_eq!(format!("{}", PresetName::Minimal), "minimal");
         assert_eq!(format!("{}", PresetName::Full), "full");
-        assert_eq!(format!("{}", PresetName::SecurityFocused), "security-focused");
+        assert_eq!(
+            format!("{}", PresetName::SecurityFocused),
+            "security-focused"
+        );
     }
 
     #[test]
@@ -389,5 +399,279 @@ performance:
         let yaml = r#"preset: "security-focused""#;
         let config: CodeGraphConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.preset, PresetName::SecurityFocused);
+    }
+
+    // ====================================================================
+    // Phase 18B — extended config schema tests
+    // ====================================================================
+
+    use pretty_assertions::assert_eq as pa_eq;
+    use proptest::prelude::*;
+    use test_case::test_case;
+
+    // --- PresetName from_str_loose parameterised ---
+
+    #[test_case("minimal", Some(PresetName::Minimal) ; "minimal lowercase")]
+    #[test_case("MINIMAL", Some(PresetName::Minimal) ; "minimal uppercase")]
+    #[test_case("Minimal", Some(PresetName::Minimal) ; "minimal mixed")]
+    #[test_case("balanced", Some(PresetName::Balanced) ; "balanced lowercase")]
+    #[test_case("BALANCED", Some(PresetName::Balanced) ; "balanced uppercase")]
+    #[test_case("full", Some(PresetName::Full) ; "full lowercase")]
+    #[test_case("FULL", Some(PresetName::Full) ; "full uppercase")]
+    #[test_case("security-focused", Some(PresetName::SecurityFocused) ; "secfocused hyphen")]
+    #[test_case("security_focused", Some(PresetName::SecurityFocused) ; "secfocused underscore")]
+    #[test_case("securityfocused", Some(PresetName::SecurityFocused) ; "secfocused concatenated")]
+    #[test_case("SecurityFocused", Some(PresetName::SecurityFocused) ; "secfocused pascal")]
+    #[test_case("", None ; "empty string")]
+    #[test_case("unknown", None ; "unknown string")]
+    #[test_case("   minimal   ", Some(PresetName::Minimal) ; "whitespace padded")]
+    fn preset_from_str_loose(input: &str, expected: Option<PresetName>) {
+        pa_eq!(PresetName::from_str_loose(input), expected);
+    }
+
+    // --- PresetName as_str ---
+
+    #[test_case(PresetName::Minimal, "minimal" ; "minimal as str")]
+    #[test_case(PresetName::Balanced, "balanced" ; "balanced as str")]
+    #[test_case(PresetName::Full, "full" ; "full as str")]
+    #[test_case(PresetName::SecurityFocused, "security-focused" ; "security as str")]
+    fn preset_as_str(name: PresetName, expected: &str) {
+        pa_eq!(name.as_str(), expected);
+    }
+
+    // --- PresetName display matches as_str ---
+
+    #[test]
+    fn preset_display_matches_as_str() {
+        for p in [
+            PresetName::Minimal,
+            PresetName::Balanced,
+            PresetName::Full,
+            PresetName::SecurityFocused,
+        ] {
+            pa_eq!(format!("{}", p), p.as_str());
+        }
+    }
+
+    // --- CodeGraphConfig defaults ---
+
+    #[test]
+    fn default_config_is_category_enabled_returns_true() {
+        let config = CodeGraphConfig::default();
+        assert!(config.is_category_enabled("Anything"));
+        assert!(config.is_category_enabled("Security"));
+        assert!(config.is_category_enabled("NonExistent"));
+    }
+
+    #[test]
+    fn default_config_is_tool_enabled_returns_true() {
+        let config = CodeGraphConfig::default();
+        assert!(config.is_tool_enabled("codegraph_query"));
+        assert!(config.is_tool_enabled("nonexistent_tool"));
+    }
+
+    // --- CodeGraphConfig with overrides ---
+
+    #[test]
+    fn config_disabled_category() {
+        let mut config = CodeGraphConfig::default();
+        config
+            .tools
+            .categories
+            .insert("Git".to_string(), CategoryConfig { enabled: false });
+        assert!(!config.is_category_enabled("Git"));
+        assert!(config.is_category_enabled("Security")); // not touched
+    }
+
+    #[test]
+    fn config_disabled_tool() {
+        let mut config = CodeGraphConfig::default();
+        config.tools.overrides.insert(
+            "codegraph_dead_code".to_string(),
+            ToolOverride::disabled("slow"),
+        );
+        assert!(!config.is_tool_enabled("codegraph_dead_code"));
+        assert!(config.is_tool_enabled("codegraph_query"));
+    }
+
+    #[test]
+    fn config_enabled_tool_override() {
+        let mut config = CodeGraphConfig::default();
+        config
+            .tools
+            .overrides
+            .insert("codegraph_query".to_string(), ToolOverride::enabled());
+        assert!(config.is_tool_enabled("codegraph_query"));
+    }
+
+    // --- ToolOverride ---
+
+    #[test]
+    fn tool_override_disabled_has_reason() {
+        let ov = ToolOverride::disabled("too slow for interactive use");
+        assert!(!ov.enabled);
+        pa_eq!(ov.reason.as_deref(), Some("too slow for interactive use"));
+    }
+
+    #[test]
+    fn tool_override_enabled_no_reason() {
+        let ov = ToolOverride::enabled();
+        assert!(ov.enabled);
+        assert!(ov.reason.is_none());
+    }
+
+    #[test]
+    fn tool_override_serde_roundtrip() {
+        let ov = ToolOverride::disabled("reason");
+        let json = serde_json::to_string(&ov).unwrap();
+        let back: ToolOverride = serde_json::from_str(&json).unwrap();
+        pa_eq!(back.enabled, false);
+        pa_eq!(back.reason.as_deref(), Some("reason"));
+    }
+
+    #[test]
+    fn tool_override_enabled_serde_roundtrip() {
+        let ov = ToolOverride::enabled();
+        let json = serde_json::to_string(&ov).unwrap();
+        let back: ToolOverride = serde_json::from_str(&json).unwrap();
+        assert!(back.enabled);
+        // reason is skipped when None
+        assert!(back.reason.is_none());
+    }
+
+    // --- CategoryConfig ---
+
+    #[test]
+    fn category_config_enabled_serde() {
+        let yaml = "enabled: true";
+        let cat: CategoryConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cat.enabled);
+    }
+
+    #[test]
+    fn category_config_disabled_serde() {
+        let yaml = "enabled: false";
+        let cat: CategoryConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(!cat.enabled);
+    }
+
+    // --- PerformanceConfig ---
+
+    #[test]
+    fn performance_config_with_max_tool_count() {
+        let yaml = "max_tool_count: 25\nexclude_tests: true";
+        let perf: PerformanceConfig = serde_yaml::from_str(yaml).unwrap();
+        pa_eq!(perf.max_tool_count, Some(25));
+        assert!(perf.exclude_tests);
+    }
+
+    #[test]
+    fn performance_config_null_max_tool_count() {
+        let yaml = "max_tool_count: null\nexclude_tests: false";
+        let perf: PerformanceConfig = serde_yaml::from_str(yaml).unwrap();
+        pa_eq!(perf.max_tool_count, None);
+        assert!(!perf.exclude_tests);
+    }
+
+    // --- Full YAML config variations ---
+
+    #[test]
+    fn config_empty_yaml_uses_defaults() {
+        let yaml = "{}";
+        let config: CodeGraphConfig = serde_yaml::from_str(yaml).unwrap();
+        pa_eq!(config.version, "1.0");
+        pa_eq!(config.preset, PresetName::Full);
+    }
+
+    #[test]
+    fn config_version_only_yaml() {
+        let yaml = r#"version: "2.0""#;
+        let config: CodeGraphConfig = serde_yaml::from_str(yaml).unwrap();
+        pa_eq!(config.version, "2.0");
+        pa_eq!(config.preset, PresetName::Full); // default
+    }
+
+    #[test]
+    fn config_multiple_tool_overrides() {
+        let yaml = r#"
+tools:
+  overrides:
+    tool_a:
+      enabled: false
+      reason: "disabled by user"
+    tool_b:
+      enabled: true
+    tool_c:
+      enabled: false
+      reason: "too slow"
+"#;
+        let config: CodeGraphConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(!config.is_tool_enabled("tool_a"));
+        assert!(config.is_tool_enabled("tool_b"));
+        assert!(!config.is_tool_enabled("tool_c"));
+    }
+
+    #[test]
+    fn config_multiple_category_overrides() {
+        let yaml = r#"
+tools:
+  categories:
+    Security:
+      enabled: true
+    Git:
+      enabled: false
+    Analysis:
+      enabled: true
+"#;
+        let config: CodeGraphConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.is_category_enabled("Security"));
+        assert!(!config.is_category_enabled("Git"));
+        assert!(config.is_category_enabled("Analysis"));
+        assert!(config.is_category_enabled("Unknown")); // default true
+    }
+
+    // --- proptest: serialization roundtrip ---
+
+    proptest! {
+        #[test]
+        fn config_yaml_roundtrip_proptest(preset_idx in 0u8..4) {
+            let presets = [PresetName::Minimal, PresetName::Balanced, PresetName::Full, PresetName::SecurityFocused];
+            let name = presets[preset_idx as usize];
+            let config = CodeGraphConfig { preset: name, ..Default::default() };
+            let yaml = serde_yaml::to_string(&config).unwrap();
+            let back: CodeGraphConfig = serde_yaml::from_str(&yaml).unwrap();
+            pa_eq!(config.version, back.version);
+            pa_eq!(config.preset, back.preset);
+        }
+
+        #[test]
+        fn config_json_roundtrip_proptest(preset_idx in 0u8..4) {
+            let presets = [PresetName::Minimal, PresetName::Balanced, PresetName::Full, PresetName::SecurityFocused];
+            let name = presets[preset_idx as usize];
+            let config = CodeGraphConfig { preset: name, ..Default::default() };
+            let json = serde_json::to_string(&config).unwrap();
+            let back: CodeGraphConfig = serde_json::from_str(&json).unwrap();
+            pa_eq!(config.preset, back.preset);
+        }
+
+        #[test]
+        fn preset_from_str_loose_never_panics(s in "\\PC{0,50}") {
+            let _ = PresetName::from_str_loose(&s);
+        }
+    }
+
+    // --- ToolMetadata ---
+
+    #[test]
+    fn tool_metadata_fields() {
+        let meta = ToolMetadata {
+            name: "codegraph_query".into(),
+            category: "Search".into(),
+            description: "Hybrid search".into(),
+            estimated_tokens: 200,
+        };
+        pa_eq!(meta.name, "codegraph_query");
+        pa_eq!(meta.category, "Search");
+        pa_eq!(meta.estimated_tokens, 200);
     }
 }

@@ -215,4 +215,267 @@ mod tests {
         let authors: Vec<&str> = blame.iter().map(|b| b.author.as_str()).collect();
         assert!(authors.contains(&"Other Author"));
     }
+
+    // =====================================================================
+    // Additional blame tests
+    // =====================================================================
+
+    #[test]
+    fn test_blame_commit_hash_is_40_hex_chars() {
+        let (_dir, path) = create_test_repo();
+        let blame = git_blame(&path, "hello.rs").unwrap();
+        for line in &blame {
+            assert_eq!(line.commit_hash.len(), 40, "hash length should be 40");
+            assert!(
+                line.commit_hash.chars().all(|c| c.is_ascii_hexdigit()),
+                "hash should be hex: {}",
+                line.commit_hash
+            );
+        }
+    }
+
+    #[test]
+    fn test_blame_date_format_is_valid() {
+        let (_dir, path) = create_test_repo();
+        let blame = git_blame(&path, "hello.rs").unwrap();
+        for line in &blame {
+            // Date should be in YYYY-MM-DD HH:MM:SS format
+            assert!(
+                line.date.len() >= 10,
+                "date should be at least 10 chars: {}",
+                line.date
+            );
+            assert!(
+                line.date.contains('-'),
+                "date should contain dash: {}",
+                line.date
+            );
+        }
+    }
+
+    #[test]
+    fn test_blame_content_matches_file() {
+        let (_dir, path) = create_test_repo();
+        let blame = git_blame(&path, "hello.rs").unwrap();
+        let contents: Vec<&str> = blame.iter().map(|b| b.content.as_str()).collect();
+        assert_eq!(contents[0], "fn main() {");
+        assert!(contents[1].contains("println"));
+        assert_eq!(contents[2], "}");
+    }
+
+    #[test]
+    fn test_blame_single_line_file() {
+        let (_dir, path) = create_test_repo();
+        std::fs::write(path.join("single.rs"), "fn one_liner() {}\n").unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&path)
+                .env("GIT_AUTHOR_NAME", "Test Author")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_NAME", "Test Author")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com")
+                .output()
+                .unwrap()
+        };
+        git(&["add", "single.rs"]);
+        git(&["commit", "-m", "add single line file"]);
+
+        let blame = git_blame(&path, "single.rs").unwrap();
+        assert_eq!(blame.len(), 1);
+        assert_eq!(blame[0].line_number, 1);
+        assert!(blame[0].content.contains("one_liner"));
+    }
+
+    #[test]
+    fn test_blame_empty_file() {
+        let (_dir, path) = create_test_repo();
+        std::fs::write(path.join("empty.rs"), "").unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&path)
+                .env("GIT_AUTHOR_NAME", "Test Author")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_NAME", "Test Author")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com")
+                .output()
+                .unwrap()
+        };
+        git(&["add", "empty.rs"]);
+        git(&["commit", "-m", "add empty file"]);
+
+        let blame = git_blame(&path, "empty.rs").unwrap();
+        assert!(blame.is_empty());
+    }
+
+    #[test]
+    fn test_blame_subdirectory_file() {
+        let (_dir, path) = create_test_repo();
+        std::fs::create_dir_all(path.join("src/lib")).unwrap();
+        std::fs::write(path.join("src/lib/util.rs"), "pub fn util() {}\n").unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&path)
+                .env("GIT_AUTHOR_NAME", "Test Author")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_NAME", "Test Author")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com")
+                .output()
+                .unwrap()
+        };
+        git(&["add", "."]);
+        git(&["commit", "-m", "add subdir file"]);
+
+        let blame = git_blame(&path, "src/lib/util.rs").unwrap();
+        assert_eq!(blame.len(), 1);
+        assert!(blame[0].content.contains("util"));
+    }
+
+    #[test]
+    fn test_blame_multiline_file_preserves_order() {
+        let (_dir, path) = create_test_repo();
+        std::fs::write(path.join("multi.rs"), "line1\nline2\nline3\nline4\nline5\n").unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&path)
+                .env("GIT_AUTHOR_NAME", "Test Author")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_NAME", "Test Author")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com")
+                .output()
+                .unwrap()
+        };
+        git(&["add", "multi.rs"]);
+        git(&["commit", "-m", "add multi"]);
+
+        let blame = git_blame(&path, "multi.rs").unwrap();
+        assert_eq!(blame.len(), 5);
+        let numbers: Vec<usize> = blame.iter().map(|b| b.line_number).collect();
+        assert_eq!(numbers, vec![1, 2, 3, 4, 5]);
+        for (i, line) in blame.iter().enumerate() {
+            assert_eq!(line.content, format!("line{}", i + 1));
+        }
+    }
+
+    #[test]
+    fn test_blame_all_same_author_for_single_commit() {
+        let (_dir, path) = create_test_repo();
+        let blame = git_blame(&path, "hello.rs").unwrap();
+        let authors: Vec<&str> = blame.iter().map(|b| b.author.as_str()).collect();
+        assert!(
+            authors.iter().all(|a| *a == "Test Author"),
+            "All lines should be by Test Author"
+        );
+    }
+
+    #[test]
+    fn test_blame_all_same_commit_for_single_commit() {
+        let (_dir, path) = create_test_repo();
+        let blame = git_blame(&path, "hello.rs").unwrap();
+        let hashes: Vec<&str> = blame.iter().map(|b| b.commit_hash.as_str()).collect();
+        let first = hashes[0];
+        assert!(
+            hashes.iter().all(|h| *h == first),
+            "All lines should share the same commit hash"
+        );
+    }
+
+    #[test]
+    fn test_blame_email_stripped_of_angle_brackets() {
+        let (_dir, path) = create_test_repo();
+        let blame = git_blame(&path, "hello.rs").unwrap();
+        for line in &blame {
+            assert!(!line.email.contains('<'), "email should not contain <");
+            assert!(!line.email.contains('>'), "email should not contain >");
+        }
+    }
+
+    #[test]
+    fn test_parse_blame_porcelain_malformed_input() {
+        // Random garbage should produce empty results, not panic
+        let result = parse_blame_porcelain("not a valid porcelain output\nrandom lines\n").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_blame_file_with_special_chars_in_name() {
+        let (_dir, path) = create_test_repo();
+        std::fs::write(path.join("hello world.rs"), "fn greet() {}\n").unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&path)
+                .env("GIT_AUTHOR_NAME", "Test Author")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_NAME", "Test Author")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com")
+                .output()
+                .unwrap()
+        };
+        git(&["add", "."]);
+        git(&["commit", "-m", "add file with spaces"]);
+
+        let blame = git_blame(&path, "hello world.rs").unwrap();
+        assert_eq!(blame.len(), 1);
+    }
+
+    #[test]
+    fn test_blame_file_with_unicode_content() {
+        let (_dir, path) = create_test_repo();
+        std::fs::write(
+            path.join("unicode.rs"),
+            "// Turkce karakter: calisma\nfn test() {}\n",
+        )
+        .unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&path)
+                .env("GIT_AUTHOR_NAME", "Test Author")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_NAME", "Test Author")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com")
+                .output()
+                .unwrap()
+        };
+        git(&["add", "unicode.rs"]);
+        git(&["commit", "-m", "add unicode"]);
+
+        let blame = git_blame(&path, "unicode.rs").unwrap();
+        assert_eq!(blame.len(), 2);
+        assert!(blame[0].content.contains("Turkce"));
+    }
+
+    #[test]
+    fn test_validate_input_null_byte_middle() {
+        let result = super::super::validate_input("file\0path", "test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_input_double_dash() {
+        let result = super::super::validate_input("--version", "test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_input_valid_path() {
+        let result = super::super::validate_input("src/main.rs", "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_input_path_with_dots() {
+        let result = super::super::validate_input("../path/to/file.rs", "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_input_empty_string() {
+        let result = super::super::validate_input("", "test");
+        assert!(result.is_ok());
+    }
 }
