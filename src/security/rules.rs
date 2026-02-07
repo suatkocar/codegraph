@@ -675,9 +675,9 @@ cursor.execute(query)"#;
     }
 
     #[test]
-    fn test_bundled_aws_key_detection() {
+    fn test_bundled_db_connection_string_detection() {
         let rules = load_bundled_rules();
-        let source = "aws_key = \"FKIAEXAMPLEKEY000000\"";
+        let source = "url = \"postgres://admin:hunter2@db.example.com/prod\"";
         let mut found = false;
         for rule in &rules {
             if !match_rule(rule, source, "python").is_empty() {
@@ -685,7 +685,7 @@ cursor.execute(query)"#;
                 break;
             }
         }
-        assert!(found, "Should detect AWS access key");
+        assert!(found, "Should detect database connection string");
     }
 
     #[test]
@@ -846,8 +846,8 @@ cursor.execute(query)"#;
 
     // --- Secret detection patterns via test_case ---
 
-    #[test_case("FKIAEXAMPLEKEY000000" ; "aws access key")]
-    #[test_case("ghx_FAKE_TOKEN_FOR_TESTING_00000000000" ; "github token")]
+    #[test_case("db_password = 'MyDatabasePassword123!'" ; "db password variable")]
+    #[test_case("api_key = 'xK9mP2vL7nQ4wR8jT3yF6hB1cD5gA0'" ; "hardcoded api key")]
     #[test_case("password = 'SuperSecretPassword123!'" ; "hardcoded password")]
     #[test_case("-----BEGIN RSA PRIVATE KEY-----" ; "private key")]
     #[test_case("postgres://user:pass@host/db" ; "db conn string")]

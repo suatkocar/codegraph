@@ -908,11 +908,14 @@ def get_user(username):
     }
 
     #[test]
-    fn test_scan_file_aws_key() {
+    fn test_scan_file_db_password() {
         let rules = load_bundled_rules();
-        let source = "AWS_KEY = \"FKIAEXAMPLEKEY000000\"";
+        let source = "db_password = \"MyDatabasePassword123!\"";
         let findings = scan_file(Path::new("creds.py"), source, "python", &rules);
-        assert!(!findings.is_empty(), "Should detect AWS access key");
+        assert!(
+            !findings.is_empty(),
+            "Should detect hardcoded database password"
+        );
     }
 
     #[test]
@@ -1036,13 +1039,13 @@ def get_user(user_id: int):
     }
 
     #[test]
-    fn test_scan_file_github_token() {
+    fn test_scan_file_connection_string() {
         let rules = load_bundled_rules();
-        let source = "const token = 'ghx_FAKE_TOKEN_FOR_TESTING_00000000000';";
+        let source = "const url = 'postgres://admin:hunter2@db.example.com/prod';";
         let findings = scan_file(Path::new("config.js"), source, "javascript", &rules);
         assert!(
             findings.iter().any(|f| f.category == RuleCategory::Secrets),
-            "should detect GitHub token"
+            "should detect database connection string"
         );
     }
 

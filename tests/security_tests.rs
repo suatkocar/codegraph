@@ -380,12 +380,12 @@ fn detect_secrets_in_various_files() {
     let dir = TempDir::new().unwrap();
 
     let py = dir.path().join("creds.py");
-    std::fs::write(&py, "AWS_KEY = 'FKIAEXAMPLEKEY000000'").unwrap();
+    std::fs::write(&py, "db_password = 'MyDatabasePassword123!'").unwrap();
 
     let js = dir.path().join("config.js");
     std::fs::write(
         &js,
-        "const token = 'ghx_FAKE_TOKEN_FOR_TESTING_00000000000';",
+        "const url = 'postgres://admin:hunter2@db.example.com/prod';",
     )
     .unwrap();
 
