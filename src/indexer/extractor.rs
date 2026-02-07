@@ -86,36 +86,132 @@ fn is_more_specific_kind(new_kind: NodeKind, old_kind: NodeKind) -> bool {
 fn builtin_types() -> HashSet<&'static str> {
     [
         // TypeScript / JavaScript
-        "string", "number", "boolean", "void", "undefined", "null", "any",
-        "unknown", "never", "object", "symbol", "bigint",
-        "Array", "Object", "String", "Number", "Boolean", "Function", "Symbol",
-        "Promise", "Map", "Set", "WeakMap", "WeakSet",
-        "Record", "Partial", "Required", "Readonly", "Pick", "Omit",
-        "Exclude", "Extract", "ReturnType", "Parameters", "InstanceType", "Awaited",
+        "string",
+        "number",
+        "boolean",
+        "void",
+        "undefined",
+        "null",
+        "any",
+        "unknown",
+        "never",
+        "object",
+        "symbol",
+        "bigint",
+        "Array",
+        "Object",
+        "String",
+        "Number",
+        "Boolean",
+        "Function",
+        "Symbol",
+        "Promise",
+        "Map",
+        "Set",
+        "WeakMap",
+        "WeakSet",
+        "Record",
+        "Partial",
+        "Required",
+        "Readonly",
+        "Pick",
+        "Omit",
+        "Exclude",
+        "Extract",
+        "ReturnType",
+        "Parameters",
+        "InstanceType",
+        "Awaited",
         // Go
-        "int", "int8", "int16", "int32", "int64",
-        "uint", "uint8", "uint16", "uint32", "uint64",
-        "float32", "float64", "complex64", "complex128",
-        "byte", "rune", "error",
+        "int",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "float32",
+        "float64",
+        "complex64",
+        "complex128",
+        "byte",
+        "rune",
+        "error",
         // Rust
-        "i8", "i16", "i32", "i64", "i128",
-        "u8", "u16", "u32", "u64", "u128",
-        "f32", "f64", "char", "str",
-        "Vec", "Option", "Result", "Box", "Rc", "Arc",
-        "HashMap", "HashSet", "BTreeMap", "BTreeSet",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "i128",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "u128",
+        "f32",
+        "f64",
+        "char",
+        "str",
+        "Vec",
+        "Option",
+        "Result",
+        "Box",
+        "Rc",
+        "Arc",
+        "HashMap",
+        "HashSet",
+        "BTreeMap",
+        "BTreeSet",
         // Java
-        "long", "short", "float", "double",
-        "Integer", "Long", "Short", "Byte", "Float", "Double",
-        "Character", "List", "ArrayList", "HashSet",
+        "long",
+        "short",
+        "float",
+        "double",
+        "Integer",
+        "Long",
+        "Short",
+        "Byte",
+        "Float",
+        "Double",
+        "Character",
+        "List",
+        "ArrayList",
+        "HashSet",
         // C# (overlaps with Java/TS handled above)
-        "decimal", "dynamic", "var", "Dictionary", "IEnumerable",
-        "Task", "Action", "Func",
+        "decimal",
+        "dynamic",
+        "var",
+        "Dictionary",
+        "IEnumerable",
+        "Task",
+        "Action",
+        "Func",
         // C / C++
-        "unsigned", "signed", "size_t", "ptrdiff_t", "auto", "nullptr_t",
+        "unsigned",
+        "signed",
+        "size_t",
+        "ptrdiff_t",
+        "auto",
+        "nullptr_t",
         // PHP
-        "array", "mixed", "callable", "iterable", "self", "static", "parent",
+        "array",
+        "mixed",
+        "callable",
+        "iterable",
+        "self",
+        "static",
+        "parent",
         // Kotlin
-        "Int", "Byte", "Unit", "Nothing", "Any", "MutableList", "MutableMap",
+        "Int",
+        "Byte",
+        "Unit",
+        "Nothing",
+        "Any",
+        "MutableList",
+        "MutableMap",
         "MutableSet",
         // Common across multiple languages (bool already covered by "boolean")
         "bool",
@@ -180,9 +276,10 @@ impl Extractor {
             };
 
             // The @name capture gives us the identifier text.
-            let name_capture = m.captures.iter().find(|c| {
-                capture_names[c.index as usize] == "name"
-            });
+            let name_capture = m
+                .captures
+                .iter()
+                .find(|c| capture_names[c.index as usize] == "name");
             let name_capture = match name_capture {
                 Some(c) => c,
                 None => continue,
@@ -390,9 +487,7 @@ fn extract_containment_edges(file_nodes: &[CodeNode], edges: &mut Vec<CodeEdge>)
     for member in &members {
         let mut best: Option<&CodeNode> = None;
         for container in &containers {
-            if container.start_line <= member.start_line
-                && container.end_line >= member.end_line
-            {
+            if container.start_line <= member.start_line && container.end_line >= member.end_line {
                 if best.map_or(true, |b| container.start_line > b.start_line) {
                     best = Some(container);
                 }
@@ -421,9 +516,10 @@ fn extract_import_edges(
 ) {
     // TypeScript/JS uses @source for the module specifier; other languages
     // use @name on the @reference.import capture directly.
-    let source_capture = m.captures.iter().find(|c| {
-        capture_names[c.index as usize] == "source"
-    });
+    let source_capture = m
+        .captures
+        .iter()
+        .find(|c| capture_names[c.index as usize] == "source");
 
     let (module_specifier, line) = if let Some(sc) = source_capture {
         let spec = strip_quotes(&node_text(&sc.node, source_bytes));
@@ -431,9 +527,10 @@ fn extract_import_edges(
         (spec, ln)
     } else {
         // For reference.import style: use @name as the specifier.
-        let name_capture = m.captures.iter().find(|c| {
-            capture_names[c.index as usize] == "name"
-        });
+        let name_capture = m
+            .captures
+            .iter()
+            .find(|c| capture_names[c.index as usize] == "name");
         let name_capture = match name_capture {
             Some(c) => c,
             None => return,
@@ -482,9 +579,10 @@ fn extract_inheritance_edges(
     node_index: &HashMap<String, Vec<CodeNode>>,
     edges: &mut Vec<CodeEdge>,
 ) {
-    let name_capture = m.captures.iter().find(|c| {
-        capture_names[c.index as usize] == "name"
-    });
+    let name_capture = m
+        .captures
+        .iter()
+        .find(|c| capture_names[c.index as usize] == "name");
     let super_capture = m.captures.iter().find(|c| {
         let n = capture_names[c.index as usize];
         n == "superclass" || n == "superinterface"
@@ -577,9 +675,9 @@ fn extract_implements_edges(
     let line = interface_capture.node.start_position().row as u32 + 1;
 
     // Find the enclosing class by line range.
-    let enclosing_class = file_nodes.iter().find(|n| {
-        n.kind == NodeKind::Class && n.start_line <= line && n.end_line >= line
-    });
+    let enclosing_class = file_nodes
+        .iter()
+        .find(|n| n.kind == NodeKind::Class && n.start_line <= line && n.end_line >= line);
     let enclosing_class = match enclosing_class {
         Some(c) => c,
         None => return,
@@ -679,9 +777,10 @@ fn extract_constructor_edges(
     node_index: &HashMap<String, Vec<CodeNode>>,
     edges: &mut Vec<CodeEdge>,
 ) {
-    let name_capture = m.captures.iter().find(|c| {
-        capture_names[c.index as usize] == "name"
-    });
+    let name_capture = m
+        .captures
+        .iter()
+        .find(|c| capture_names[c.index as usize] == "name");
     let name_capture = match name_capture {
         Some(c) => c,
         None => return,
@@ -725,9 +824,10 @@ fn extract_type_ref_edges(
 ) {
     let builtins = builtin_types();
 
-    let name_capture = m.captures.iter().find(|c| {
-        capture_names[c.index as usize] == "name"
-    });
+    let name_capture = m
+        .captures
+        .iter()
+        .find(|c| capture_names[c.index as usize] == "name");
     let name_capture = match name_capture {
         Some(c) => c,
         None => return,
@@ -1147,10 +1247,7 @@ class Calculator {
             clean_comment("/** This is a JSDoc comment. */"),
             "This is a JSDoc comment."
         );
-        assert_eq!(
-            clean_comment("/* block comment */"),
-            "block comment"
-        );
+        assert_eq!(clean_comment("/* block comment */"), "block comment");
         assert_eq!(clean_comment("// line comment"), "line comment");
     }
 
@@ -1295,7 +1392,9 @@ type Repository interface {
 "#;
         let nodes = parse_and_extract_nodes_file(source, Language::Go, "models.go");
 
-        let user = nodes.iter().find(|n| n.name == "User" && n.kind == NodeKind::Class);
+        let user = nodes
+            .iter()
+            .find(|n| n.name == "User" && n.kind == NodeKind::Class);
         assert!(user.is_some(), "should find User struct (mapped to Class)");
 
         let repo = nodes.iter().find(|n| n.name == "Repository");
@@ -1328,7 +1427,10 @@ func (u *User) String() string {
         assert!(
             !imports.is_empty(),
             "should find import edges, got: {:?}",
-            edges.iter().map(|e| (&e.kind, &e.target)).collect::<Vec<_>>()
+            edges
+                .iter()
+                .map(|e| (&e.kind, &e.target))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -1354,8 +1456,13 @@ struct Config {
         assert!(hello.is_some(), "should find hello function");
         assert_eq!(hello.unwrap().kind, NodeKind::Function);
 
-        let config = nodes.iter().find(|n| n.name == "Config" && n.kind == NodeKind::Class);
-        assert!(config.is_some(), "should find Config struct (mapped to Class)");
+        let config = nodes
+            .iter()
+            .find(|n| n.name == "Config" && n.kind == NodeKind::Class);
+        assert!(
+            config.is_some(),
+            "should find Config struct (mapped to Class)"
+        );
     }
 
     #[test]
@@ -1405,11 +1512,18 @@ impl Point {
         let nodes = parse_and_extract_nodes_file(source, Language::Rust, "lib.rs");
         let edges = parse_and_extract_edges_file(source, Language::Rust, &nodes, "lib.rs");
 
-        let new_fn = nodes.iter().find(|n| n.name == "new" && n.kind == NodeKind::Method);
+        let new_fn = nodes
+            .iter()
+            .find(|n| n.name == "new" && n.kind == NodeKind::Method);
         assert!(new_fn.is_some(), "should find new as Method inside impl");
 
-        let distance = nodes.iter().find(|n| n.name == "distance" && n.kind == NodeKind::Method);
-        assert!(distance.is_some(), "should find distance as Method inside impl");
+        let distance = nodes
+            .iter()
+            .find(|n| n.name == "distance" && n.kind == NodeKind::Method);
+        assert!(
+            distance.is_some(),
+            "should find distance as Method inside impl"
+        );
 
         let imports: Vec<&CodeEdge> = edges
             .iter()
@@ -1539,14 +1653,21 @@ void print_point(struct Point* p) {
         let nodes = parse_and_extract_nodes_file(source, Language::C, "main.c");
         let edges = parse_and_extract_edges_file(source, Language::C, &nodes, "main.c");
 
-        let add = nodes.iter().find(|n| n.name == "add" && n.kind == NodeKind::Function);
+        let add = nodes
+            .iter()
+            .find(|n| n.name == "add" && n.kind == NodeKind::Function);
         assert!(add.is_some(), "should find add function");
 
         let print_point = nodes.iter().find(|n| n.name == "print_point");
         assert!(print_point.is_some(), "should find print_point function");
 
-        let point = nodes.iter().find(|n| n.name == "Point" && n.kind == NodeKind::Class);
-        assert!(point.is_some(), "should find Point struct (mapped to Class)");
+        let point = nodes
+            .iter()
+            .find(|n| n.name == "Point" && n.kind == NodeKind::Class);
+        assert!(
+            point.is_some(),
+            "should find Point struct (mapped to Class)"
+        );
 
         let imports: Vec<&CodeEdge> = edges
             .iter()
@@ -1585,10 +1706,14 @@ public:
         let nodes = parse_and_extract_nodes_file(source, Language::Cpp, "animal.cpp");
         let edges = parse_and_extract_edges_file(source, Language::Cpp, &nodes, "animal.cpp");
 
-        let animal = nodes.iter().find(|n| n.name == "Animal" && n.kind == NodeKind::Class);
+        let animal = nodes
+            .iter()
+            .find(|n| n.name == "Animal" && n.kind == NodeKind::Class);
         assert!(animal.is_some(), "should find Animal class");
 
-        let dog = nodes.iter().find(|n| n.name == "Dog" && n.kind == NodeKind::Class);
+        let dog = nodes
+            .iter()
+            .find(|n| n.name == "Dog" && n.kind == NodeKind::Class);
         assert!(dog.is_some(), "should find Dog class");
 
         let extends: Vec<&CodeEdge> = edges
@@ -1618,10 +1743,14 @@ double multiply(double a, double b) {
 "#;
         let nodes = parse_and_extract_nodes_file(source, Language::Cpp, "math.cpp");
 
-        let add = nodes.iter().find(|n| n.name == "add" && n.kind == NodeKind::Function);
+        let add = nodes
+            .iter()
+            .find(|n| n.name == "add" && n.kind == NodeKind::Function);
         assert!(add.is_some(), "should find add function");
 
-        let multiply = nodes.iter().find(|n| n.name == "multiply" && n.kind == NodeKind::Function);
+        let multiply = nodes
+            .iter()
+            .find(|n| n.name == "multiply" && n.kind == NodeKind::Function);
         assert!(multiply.is_some(), "should find multiply function");
     }
 
@@ -1730,13 +1859,19 @@ end
         let nodes = parse_and_extract_nodes_file(source, Language::Ruby, "animal.rb");
         let edges = parse_and_extract_edges_file(source, Language::Ruby, &nodes, "animal.rb");
 
-        let animal = nodes.iter().find(|n| n.name == "Animal" && n.kind == NodeKind::Class);
+        let animal = nodes
+            .iter()
+            .find(|n| n.name == "Animal" && n.kind == NodeKind::Class);
         assert!(animal.is_some(), "should find Animal class");
 
-        let dog = nodes.iter().find(|n| n.name == "Dog" && n.kind == NodeKind::Class);
+        let dog = nodes
+            .iter()
+            .find(|n| n.name == "Dog" && n.kind == NodeKind::Class);
         assert!(dog.is_some(), "should find Dog class");
 
-        let init = nodes.iter().find(|n| n.name == "initialize" && n.kind == NodeKind::Method);
+        let init = nodes
+            .iter()
+            .find(|n| n.name == "initialize" && n.kind == NodeKind::Method);
         assert!(init.is_some(), "should find initialize method");
 
         let extends: Vec<&CodeEdge> = edges
@@ -1770,10 +1905,14 @@ class Calculator {
 "#;
         let nodes = parse_and_extract_nodes_file(source, Language::Kotlin, "calc.kt");
 
-        let greet = nodes.iter().find(|n| n.name == "greet" && n.kind == NodeKind::Function);
+        let greet = nodes
+            .iter()
+            .find(|n| n.name == "greet" && n.kind == NodeKind::Function);
         assert!(greet.is_some(), "should find greet function");
 
-        let calc = nodes.iter().find(|n| n.name == "Calculator" && n.kind == NodeKind::Class);
+        let calc = nodes
+            .iter()
+            .find(|n| n.name == "Calculator" && n.kind == NodeKind::Class);
         assert!(calc.is_some(), "should find Calculator class");
     }
 

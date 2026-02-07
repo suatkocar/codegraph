@@ -26,7 +26,9 @@ use serde_json::json;
 /// JSON — the caller always gets a `serde_json::Value` to work with.
 fn read_hook_event() -> serde_json::Value {
     let mut input = String::new();
-    std::io::stdin().read_to_string(&mut input).unwrap_or_default();
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .unwrap_or_default();
     serde_json::from_str(&input).unwrap_or(json!({}))
 }
 
@@ -104,11 +106,13 @@ pub fn handle_session_start() {
         match pipeline.index_directory(&options) {
             Ok(result) => {
                 let elapsed = start.elapsed().as_millis();
-                let stats = store.get_stats().unwrap_or(crate::graph::store::GraphStats {
-                    nodes: 0,
-                    edges: 0,
-                    files: 0,
-                });
+                let stats = store
+                    .get_stats()
+                    .unwrap_or(crate::graph::store::GraphStats {
+                        nodes: 0,
+                        edges: 0,
+                        files: 0,
+                    });
                 let message = format!(
                     "CodeGraph: indexed {} files ({} nodes, {} edges) in {}ms",
                     result.files_indexed, stats.nodes, stats.edges, elapsed,
@@ -271,11 +275,13 @@ pub fn handle_pre_compact() {
             }
         }
 
-        let stats = store.get_stats().unwrap_or(crate::graph::store::GraphStats {
-            nodes: 0,
-            edges: 0,
-            files: 0,
-        });
+        let stats = store
+            .get_stats()
+            .unwrap_or(crate::graph::store::GraphStats {
+                nodes: 0,
+                edges: 0,
+                files: 0,
+            });
 
         let summary = format!(
             "# CodeGraph — Key Symbols (preserved across compaction)\n\
@@ -418,8 +424,7 @@ mod tests {
         // In a test context, stdin is closed/empty — should return {}.
         // We can't easily test stdin in unit tests, but we verify the
         // fallback path by checking the return type contract.
-        let fallback: serde_json::Value =
-            serde_json::from_str("").unwrap_or(json!({}));
+        let fallback: serde_json::Value = serde_json::from_str("").unwrap_or(json!({}));
         assert_eq!(fallback, json!({}));
     }
 }

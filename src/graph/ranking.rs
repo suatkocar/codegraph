@@ -96,11 +96,7 @@ impl<'a> GraphRanking<'a> {
     ///
     /// Uses the power-iteration method on the adjacency structure.  Runs
     /// entirely in memory after loading the edge list from SQLite.
-    pub fn compute_page_rank(
-        &self,
-        damping: f64,
-        iterations: usize,
-    ) -> Vec<RankedNode> {
+    pub fn compute_page_rank(&self, damping: f64, iterations: usize) -> Vec<RankedNode> {
         let graph = self.load_graph();
         let n = graph.node_ids.len();
         if n == 0 {
@@ -158,7 +154,11 @@ impl<'a> GraphRanking<'a> {
             })
             .collect();
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results
     }
 
@@ -245,7 +245,11 @@ impl<'a> GraphRanking<'a> {
             })
             .collect();
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results
     }
 
@@ -375,15 +379,19 @@ impl<'a> GraphRanking<'a> {
 
             for row in rows.flatten() {
                 let (source_id, target_id) = row;
-                if let (Some(&s_idx), Some(&t_idx)) =
-                    (node_to_idx.get(source_id.as_str()), node_to_idx.get(target_id.as_str()))
-                {
+                if let (Some(&s_idx), Some(&t_idx)) = (
+                    node_to_idx.get(source_id.as_str()),
+                    node_to_idx.get(target_id.as_str()),
+                ) {
                     out_links.entry(s_idx).or_default().push(t_idx);
                 }
             }
         }
 
-        LoadedGraph { node_ids, out_links }
+        LoadedGraph {
+            node_ids,
+            out_links,
+        }
     }
 }
 
@@ -400,8 +408,7 @@ mod tests {
 
     /// Spin up an in-memory store with the full schema applied.
     fn setup() -> GraphStore {
-        let conn =
-            initialize_database(":memory:").expect("schema init should succeed on :memory:");
+        let conn = initialize_database(":memory:").expect("schema init should succeed on :memory:");
         GraphStore::from_connection(conn)
     }
 
@@ -502,9 +509,13 @@ mod tests {
 
         // D is the sink node (receives from B and C), so it should rank highest.
         assert_eq!(
-            result[0].node_id, "D",
+            result[0].node_id,
+            "D",
             "sink node D should have the highest PageRank, got: {:?}",
-            result.iter().map(|r| (&r.node_id, r.score)).collect::<Vec<_>>()
+            result
+                .iter()
+                .map(|r| (&r.node_id, r.score))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -517,7 +528,10 @@ mod tests {
         let ranking = GraphRanking::new(&store);
 
         let result = ranking.personalized_page_rank("NONEXISTENT", 0.85, 100);
-        assert!(result.is_empty(), "PPR for missing node should return empty");
+        assert!(
+            result.is_empty(),
+            "PPR for missing node should return empty"
+        );
     }
 
     #[test]
@@ -532,9 +546,13 @@ mod tests {
         // The query node should have the highest personalized score
         // because teleportation always returns to it.
         assert_eq!(
-            result[0].node_id, "A",
+            result[0].node_id,
+            "A",
             "query node A should rank highest in PPR, got: {:?}",
-            result.iter().map(|r| (&r.node_id, r.score)).collect::<Vec<_>>()
+            result
+                .iter()
+                .map(|r| (&r.node_id, r.score))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -612,7 +630,13 @@ mod tests {
     fn page_rank_single_node_graph() {
         let store = setup();
         store
-            .upsert_node(&make_node("solo", "solo_fn", "solo.ts", NodeKind::Function, 1))
+            .upsert_node(&make_node(
+                "solo",
+                "solo_fn",
+                "solo.ts",
+                NodeKind::Function,
+                1,
+            ))
             .unwrap();
         let ranking = GraphRanking::new(&store);
 
@@ -631,7 +655,13 @@ mod tests {
     fn ppr_single_node_graph() {
         let store = setup();
         store
-            .upsert_node(&make_node("solo", "solo_fn", "solo.ts", NodeKind::Function, 1))
+            .upsert_node(&make_node(
+                "solo",
+                "solo_fn",
+                "solo.ts",
+                NodeKind::Function,
+                1,
+            ))
             .unwrap();
         let ranking = GraphRanking::new(&store);
 

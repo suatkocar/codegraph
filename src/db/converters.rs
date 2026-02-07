@@ -43,10 +43,7 @@ pub fn row_to_code_node(row: &Row<'_>) -> rusqlite::Result<CodeNode> {
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_default();
 
-    let body = meta
-        .get("body")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    let body = meta.get("body").and_then(|v| v.as_str()).map(String::from);
 
     let exported = meta.get("exported").and_then(|v| v.as_bool());
 
@@ -93,18 +90,11 @@ pub fn row_to_code_edge(row: &Row<'_>) -> rusqlite::Result<CodeEdge> {
         .unwrap_or_default();
 
     let file_path = props.get("filePath").cloned().unwrap_or_default();
-    let line: u32 = props
-        .get("line")
-        .and_then(|l| l.parse().ok())
-        .unwrap_or(0);
+    let line: u32 = props.get("line").and_then(|l| l.parse().ok()).unwrap_or(0);
 
     let kind = EdgeKind::from_str_loose(&kind_str).unwrap_or(EdgeKind::References);
 
-    let metadata = if props.is_empty() {
-        None
-    } else {
-        Some(props)
-    };
+    let metadata = if props.is_empty() { None } else { Some(props) };
 
     Ok(CodeEdge {
         source,
@@ -162,9 +152,11 @@ mod tests {
         .unwrap();
 
         let node = conn
-            .query_row("SELECT * FROM nodes WHERE id = ?1", ["function:src/main.ts:hello:1"], |row| {
-                row_to_code_node(row)
-            })
+            .query_row(
+                "SELECT * FROM nodes WHERE id = ?1",
+                ["function:src/main.ts:hello:1"],
+                |row| row_to_code_node(row),
+            )
             .unwrap();
 
         assert_eq!(node.id, "function:src/main.ts:hello:1");
@@ -264,11 +256,9 @@ mod tests {
         .unwrap();
 
         let edge = conn
-            .query_row(
-                "SELECT * FROM edges WHERE source_id = 'n1'",
-                [],
-                |row| row_to_code_edge(row),
-            )
+            .query_row("SELECT * FROM edges WHERE source_id = 'n1'", [], |row| {
+                row_to_code_edge(row)
+            })
             .unwrap();
 
         assert_eq!(edge.kind, EdgeKind::Imports);

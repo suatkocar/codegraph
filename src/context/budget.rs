@@ -237,10 +237,7 @@ mod tests {
 
     #[test]
     fn compact_multiline_collapses_whitespace() {
-        assert_eq!(
-            compact_multiline("  hello\n  world  "),
-            "hello world"
-        );
+        assert_eq!(compact_multiline("  hello\n  world  "), "hello world");
     }
 
     #[test]

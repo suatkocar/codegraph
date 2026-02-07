@@ -201,10 +201,10 @@ impl GraphStore {
             node.start_line,
             node.end_line,
             node.language.as_str(),
-            node.body,                            // signature column
-            node.documentation,                   // doc_comment column
-            compute_simple_hash(&node.id),        // source_hash
-            build_node_metadata(node),            // metadata JSON
+            node.body,                     // signature column
+            node.documentation,            // doc_comment column
+            compute_simple_hash(&node.id), // source_hash
+            build_node_metadata(node),     // metadata JSON
         ])?;
         Ok(())
     }
@@ -339,7 +339,9 @@ impl GraphStore {
 
     /// Retrieve a single node by its ID, or `None` if it doesn't exist.
     pub fn get_node(&self, id: &str) -> Result<Option<CodeNode>> {
-        let mut stmt = self.conn.prepare_cached("SELECT * FROM nodes WHERE id = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT * FROM nodes WHERE id = ?1")?;
         let mut rows = stmt.query_and_then(params![id], row_to_code_node)?;
         match rows.next() {
             Some(Ok(node)) => Ok(Some(node)),
@@ -387,16 +389,12 @@ impl GraphStore {
     // -------------------------------------------------------------------
 
     /// Get outgoing edges from `node_id`, optionally filtered by edge type.
-    pub fn get_out_edges(
-        &self,
-        node_id: &str,
-        edge_type: Option<&str>,
-    ) -> Result<Vec<CodeEdge>> {
+    pub fn get_out_edges(&self, node_id: &str, edge_type: Option<&str>) -> Result<Vec<CodeEdge>> {
         match edge_type {
             Some(t) => {
-                let mut stmt = self.conn.prepare_cached(
-                    "SELECT * FROM edges WHERE source_id = ?1 AND type = ?2",
-                )?;
+                let mut stmt = self
+                    .conn
+                    .prepare_cached("SELECT * FROM edges WHERE source_id = ?1 AND type = ?2")?;
                 let rows = stmt.query_and_then(params![node_id, t], row_to_code_edge)?;
                 rows.collect::<std::result::Result<Vec<_>, _>>()
                     .map_err(Into::into)
@@ -413,16 +411,12 @@ impl GraphStore {
     }
 
     /// Get incoming edges to `node_id`, optionally filtered by edge type.
-    pub fn get_in_edges(
-        &self,
-        node_id: &str,
-        edge_type: Option<&str>,
-    ) -> Result<Vec<CodeEdge>> {
+    pub fn get_in_edges(&self, node_id: &str, edge_type: Option<&str>) -> Result<Vec<CodeEdge>> {
         match edge_type {
             Some(t) => {
-                let mut stmt = self.conn.prepare_cached(
-                    "SELECT * FROM edges WHERE target_id = ?1 AND type = ?2",
-                )?;
+                let mut stmt = self
+                    .conn
+                    .prepare_cached("SELECT * FROM edges WHERE target_id = ?1 AND type = ?2")?;
                 let rows = stmt.query_and_then(params![node_id, t], row_to_code_edge)?;
                 rows.collect::<std::result::Result<Vec<_>, _>>()
                     .map_err(Into::into)
@@ -464,18 +458,14 @@ impl GraphStore {
 
     /// Get the total number of nodes.
     pub fn get_node_count(&self) -> Result<usize> {
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT count(*) FROM nodes")?;
+        let mut stmt = self.conn.prepare_cached("SELECT count(*) FROM nodes")?;
         let count: i64 = stmt.query_row([], |row| row.get(0))?;
         Ok(count as usize)
     }
 
     /// Get the total number of edges.
     pub fn get_edge_count(&self) -> Result<usize> {
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT count(*) FROM edges")?;
+        let mut stmt = self.conn.prepare_cached("SELECT count(*) FROM edges")?;
         let count: i64 = stmt.query_row([], |row| row.get(0))?;
         Ok(count as usize)
     }
@@ -510,8 +500,7 @@ mod tests {
 
     /// Spin up an in-memory store with the full schema applied.
     fn setup() -> GraphStore {
-        let conn =
-            initialize_database(":memory:").expect("schema init should succeed on :memory:");
+        let conn = initialize_database(":memory:").expect("schema init should succeed on :memory:");
         GraphStore::from_connection(conn)
     }
 
@@ -550,11 +539,20 @@ mod tests {
     #[test]
     fn upsert_and_get_node_round_trip() {
         let store = setup();
-        let node = make_node("fn:main.ts:hello:1", "hello", "main.ts", NodeKind::Function, 1);
+        let node = make_node(
+            "fn:main.ts:hello:1",
+            "hello",
+            "main.ts",
+            NodeKind::Function,
+            1,
+        );
 
         store.upsert_node(&node).unwrap();
 
-        let got = store.get_node("fn:main.ts:hello:1").unwrap().expect("node should exist");
+        let got = store
+            .get_node("fn:main.ts:hello:1")
+            .unwrap()
+            .expect("node should exist");
         assert_eq!(got.id, node.id);
         assert_eq!(got.name, "hello");
         assert_eq!(got.kind, NodeKind::Function);
@@ -688,9 +686,18 @@ mod tests {
 
         assert_eq!(store.get_node_count().unwrap(), 1);
         assert_eq!(store.get_edge_count().unwrap(), 0);
-        assert!(store.get_node("n1").unwrap().is_none(), "old node n1 should be gone");
-        assert!(store.get_node("n2").unwrap().is_none(), "old node n2 should be gone");
-        let fresh = store.get_node("n3").unwrap().expect("new node n3 should exist");
+        assert!(
+            store.get_node("n1").unwrap().is_none(),
+            "old node n1 should be gone"
+        );
+        assert!(
+            store.get_node("n2").unwrap().is_none(),
+            "old node n2 should be gone"
+        );
+        let fresh = store
+            .get_node("n3")
+            .unwrap()
+            .expect("new node n3 should exist");
         assert_eq!(fresh.name, "fresh");
     }
 

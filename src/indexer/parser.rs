@@ -54,9 +54,9 @@ impl CodeParser {
             .set_language(&ts_lang)
             .map_err(|e| CodeGraphError::Parse(format!("Language version mismatch: {e}")))?;
 
-        parser
-            .parse(content, None)
-            .ok_or_else(|| CodeGraphError::Parse("tree-sitter returned None (timeout or cancellation)".into()))
+        parser.parse(content, None).ok_or_else(|| {
+            CodeGraphError::Parse("tree-sitter returned None (timeout or cancellation)".into())
+        })
     }
 
     /// Return the native `tree_sitter::Language` for a [`Language`] variant.
@@ -93,8 +93,9 @@ impl CodeParser {
     pub fn load_query(language: Language) -> Result<tree_sitter::Query> {
         let ts_lang = Self::get_ts_language(language);
         let source = language.query_source();
-        tree_sitter::Query::new(&ts_lang, source)
-            .map_err(|e| CodeGraphError::Parse(format!("Query compilation error for {language}: {e}")))
+        tree_sitter::Query::new(&ts_lang, source).map_err(|e| {
+            CodeGraphError::Parse(format!("Query compilation error for {language}: {e}"))
+        })
     }
 
     /// Detect the [`Language`] for a file path based on its extension.
@@ -151,7 +152,9 @@ mod tests {
             }
         "#;
 
-        let tree = parser.parse(source, Language::TypeScript).expect("should parse TypeScript");
+        let tree = parser
+            .parse(source, Language::TypeScript)
+            .expect("should parse TypeScript");
         let root = tree.root_node();
         assert_eq!(root.kind(), "program");
         assert!(root.child_count() > 0, "tree should have children");
@@ -180,7 +183,9 @@ mod tests {
             }
         "#;
 
-        let tree = parser.parse(source, Language::JavaScript).expect("should parse JavaScript");
+        let tree = parser
+            .parse(source, Language::JavaScript)
+            .expect("should parse JavaScript");
         let root = tree.root_node();
         assert_eq!(root.kind(), "program");
         assert!(root.child_count() > 0, "tree should have children");
@@ -205,7 +210,9 @@ class UserService:
         return self.db.find(user_id)
 "#;
 
-        let tree = parser.parse(source, Language::Python).expect("should parse Python");
+        let tree = parser
+            .parse(source, Language::Python)
+            .expect("should parse Python");
         let root = tree.root_node();
         assert_eq!(root.kind(), "module");
         assert!(root.child_count() > 0, "tree should have children");
@@ -229,7 +236,9 @@ class UserService:
             export default Greeting;
         "#;
 
-        let tree = parser.parse(source, Language::Tsx).expect("should parse TSX");
+        let tree = parser
+            .parse(source, Language::Tsx)
+            .expect("should parse TSX");
         let root = tree.root_node();
         assert_eq!(root.kind(), "program");
         assert!(root.child_count() > 0);
@@ -238,7 +247,9 @@ class UserService:
     #[test]
     fn parse_empty_source_returns_tree() {
         let parser = CodeParser::new();
-        let tree = parser.parse("", Language::TypeScript).expect("empty source should parse");
+        let tree = parser
+            .parse("", Language::TypeScript)
+            .expect("empty source should parse");
         let root = tree.root_node();
         assert_eq!(root.kind(), "program");
         assert_eq!(root.child_count(), 0);
@@ -303,7 +314,9 @@ fn main() {
     println!("{}", user.greet("World"));
 }
 "#;
-        let tree = parser.parse(source, Language::Rust).expect("should parse Rust");
+        let tree = parser
+            .parse(source, Language::Rust)
+            .expect("should parse Rust");
         let root = tree.root_node();
         assert_eq!(root.kind(), "source_file");
         assert!(root.child_count() > 0, "tree should have children");
@@ -335,7 +348,9 @@ public class UserService implements Greeter {
     }
 }
 "#;
-        let tree = parser.parse(source, Language::Java).expect("should parse Java");
+        let tree = parser
+            .parse(source, Language::Java)
+            .expect("should parse Java");
         let root = tree.root_node();
         assert_eq!(root.kind(), "program");
         assert!(root.child_count() > 0, "tree should have children");
@@ -403,7 +418,9 @@ int main() {
     return 0;
 }
 "#;
-        let tree = parser.parse(source, Language::Cpp).expect("should parse C++");
+        let tree = parser
+            .parse(source, Language::Cpp)
+            .expect("should parse C++");
         let root = tree.root_node();
         assert_eq!(root.kind(), "translation_unit");
         assert!(root.child_count() > 0, "tree should have children");
@@ -438,7 +455,9 @@ namespace App
     }
 }
 "#;
-        let tree = parser.parse(source, Language::CSharp).expect("should parse C#");
+        let tree = parser
+            .parse(source, Language::CSharp)
+            .expect("should parse C#");
         let root = tree.root_node();
         assert_eq!(root.kind(), "compilation_unit");
         assert!(root.child_count() > 0, "tree should have children");
@@ -475,7 +494,9 @@ function main(): void {
     echo $service->greet("World");
 }
 "#;
-        let tree = parser.parse(source, Language::Php).expect("should parse PHP");
+        let tree = parser
+            .parse(source, Language::Php)
+            .expect("should parse PHP");
         let root = tree.root_node();
         assert_eq!(root.kind(), "program");
         assert!(root.child_count() > 0, "tree should have children");
@@ -514,7 +535,9 @@ class Admin < User
   end
 end
 "#;
-        let tree = parser.parse(source, Language::Ruby).expect("should parse Ruby");
+        let tree = parser
+            .parse(source, Language::Ruby)
+            .expect("should parse Ruby");
         let root = tree.root_node();
         assert_eq!(root.kind(), "program");
         assert!(root.child_count() > 0, "tree should have children");
@@ -551,7 +574,9 @@ func main() {
     print(service.greet(name: "World"))
 }
 "#;
-        let tree = parser.parse(source, Language::Swift).expect("should parse Swift");
+        let tree = parser
+            .parse(source, Language::Swift)
+            .expect("should parse Swift");
         let root = tree.root_node();
         assert_eq!(root.kind(), "source_file");
         assert!(root.child_count() > 0, "tree should have children");
@@ -589,7 +614,9 @@ fun main() {
     println(service.greet("World"))
 }
 "#;
-        let tree = parser.parse(source, Language::Kotlin).expect("should parse Kotlin");
+        let tree = parser
+            .parse(source, Language::Kotlin)
+            .expect("should parse Kotlin");
         let root = tree.root_node();
         assert_eq!(root.kind(), "source_file");
         assert!(root.child_count() > 0, "tree should have children");
@@ -702,10 +729,22 @@ fun main() {
 
         // Core captures that our extractor will rely on
         assert!(names.contains(&"name"), "missing @name capture");
-        assert!(names.contains(&"definition.function"), "missing @definition.function capture");
-        assert!(names.contains(&"definition.class"), "missing @definition.class capture");
-        assert!(names.contains(&"definition.method"), "missing @definition.method capture");
-        assert!(names.contains(&"reference.call"), "missing @reference.call capture");
+        assert!(
+            names.contains(&"definition.function"),
+            "missing @definition.function capture"
+        );
+        assert!(
+            names.contains(&"definition.class"),
+            "missing @definition.class capture"
+        );
+        assert!(
+            names.contains(&"definition.method"),
+            "missing @definition.method capture"
+        );
+        assert!(
+            names.contains(&"reference.call"),
+            "missing @reference.call capture"
+        );
     }
 
     // -- get_ts_language ---------------------------------------------------

@@ -212,9 +212,18 @@ mod tests {
         generate_claude_md(dir, &sample_stats()).unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("# My Project"), "original content preserved");
-        assert!(content.contains("Some existing instructions."), "original content preserved");
-        assert!(content.contains(SECTION_HEADER), "CodeGraph section appended");
+        assert!(
+            content.contains("# My Project"),
+            "original content preserved"
+        );
+        assert!(
+            content.contains("Some existing instructions."),
+            "original content preserved"
+        );
+        assert!(
+            content.contains(SECTION_HEADER),
+            "CodeGraph section appended"
+        );
         assert!(content.contains("Symbols: 500"));
     }
 
@@ -237,7 +246,10 @@ mod tests {
         // Should have the new stats, not the old ones.
         assert!(content.contains("Symbols: 999"));
         assert!(content.contains("Relationships: 2500"));
-        assert!(!content.contains("Symbols: 500"), "old stats should be replaced");
+        assert!(
+            !content.contains("Symbols: 500"),
+            "old stats should be replaced"
+        );
 
         // Section header should appear exactly once.
         let header_count = content.matches(SECTION_HEADER).count();
@@ -261,10 +273,19 @@ mod tests {
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("# My Project"), "header preserved");
-        assert!(content.contains("## Other Section"), "subsequent section preserved");
-        assert!(content.contains("Keep this."), "subsequent section body preserved");
+        assert!(
+            content.contains("## Other Section"),
+            "subsequent section preserved"
+        );
+        assert!(
+            content.contains("Keep this."),
+            "subsequent section body preserved"
+        );
         assert!(content.contains("Symbols: 500"), "new stats injected");
-        assert!(!content.contains("Old content here."), "old section body removed");
+        assert!(
+            !content.contains("Old content here."),
+            "old section body removed"
+        );
     }
 
     #[test]

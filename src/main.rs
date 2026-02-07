@@ -11,7 +11,10 @@ use codegraph_mcp::indexer::{IndexOptions, IndexingPipeline};
 
 #[derive(Parser)]
 #[command(name = "codegraph-mcp")]
-#[command(version, about = "Codebase intelligence MCP server — semantic code graph with vector search")]
+#[command(
+    version,
+    about = "Codebase intelligence MCP server — semantic code graph with vector search"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -199,13 +202,22 @@ fn cmd_init(directory: &str) {
     let db_path = PathBuf::from(directory).join(".codegraph/codegraph.db");
     if db_path.exists() {
         let store = open_store(db_path.to_str().unwrap());
-        let stats_data = store.get_stats().unwrap_or_else(|_| codegraph_mcp::graph::store::GraphStats { files: 0, nodes: 0, edges: 0 });
+        let stats_data =
+            store
+                .get_stats()
+                .unwrap_or_else(|_| codegraph_mcp::graph::store::GraphStats {
+                    files: 0,
+                    nodes: 0,
+                    edges: 0,
+                });
         let proj_stats = codegraph_mcp::hooks::claude_template::ProjectStats {
             total_nodes: stats_data.nodes,
             total_edges: stats_data.edges,
             ..Default::default()
         };
-        if let Err(e) = codegraph_mcp::hooks::claude_template::generate_claude_md(directory, &proj_stats) {
+        if let Err(e) =
+            codegraph_mcp::hooks::claude_template::generate_claude_md(directory, &proj_stats)
+        {
             eprintln!("[codegraph] Warning: CLAUDE.md generation failed: {}", e);
         } else {
             eprintln!("[codegraph] CLAUDE.md template generated.");
@@ -216,12 +228,10 @@ fn cmd_init(directory: &str) {
 }
 
 fn cmd_install_hooks(directory: &str) {
-    let root = PathBuf::from(directory)
-        .canonicalize()
-        .unwrap_or_else(|e| {
-            eprintln!("Error: cannot resolve directory '{}': {}", directory, e);
-            process::exit(1);
-        });
+    let root = PathBuf::from(directory).canonicalize().unwrap_or_else(|e| {
+        eprintln!("Error: cannot resolve directory '{}': {}", directory, e);
+        process::exit(1);
+    });
 
     // Use the current binary's path as the default binary reference
     let binary_path = std::env::current_exe()
@@ -237,12 +247,10 @@ fn cmd_install_hooks(directory: &str) {
 }
 
 fn cmd_index(directory: &str, force: bool) {
-    let root = PathBuf::from(directory)
-        .canonicalize()
-        .unwrap_or_else(|e| {
-            eprintln!("Error: cannot resolve directory '{}': {}", directory, e);
-            process::exit(1);
-        });
+    let root = PathBuf::from(directory).canonicalize().unwrap_or_else(|e| {
+        eprintln!("Error: cannot resolve directory '{}': {}", directory, e);
+        process::exit(1);
+    });
 
     let db_dir = root.join(".codegraph");
     std::fs::create_dir_all(&db_dir).unwrap_or_else(|e| {
@@ -368,7 +376,10 @@ fn cmd_dead_code(db_path: &str, kind_filter: Option<&str>) {
 
     println!("Potentially unused symbols ({} found):", results.len());
     for r in &results {
-        println!("  {} ({}) — {}:{}", r.name, r.kind, r.file_path, r.start_line);
+        println!(
+            "  {} ({}) — {}:{}",
+            r.name, r.kind, r.file_path, r.start_line
+        );
     }
 }
 
@@ -384,19 +395,31 @@ fn cmd_frameworks(directory: &str) {
         let version = f.version.as_deref().unwrap_or("?");
         println!(
             "  {} v{} ({}, {}) — confidence: {:.0}%",
-            f.name, version, f.language, f.category, f.confidence * 100.0
+            f.name,
+            version,
+            f.language,
+            f.category,
+            f.confidence * 100.0
         );
     }
 }
 
 fn cmd_languages(db_path: &str) {
     let store = open_store(db_path);
-    let stats = store.get_stats().unwrap_or_else(|_| codegraph_mcp::graph::store::GraphStats { files: 0, nodes: 0, edges: 0 });
+    let stats = store
+        .get_stats()
+        .unwrap_or_else(|_| codegraph_mcp::graph::store::GraphStats {
+            files: 0,
+            nodes: 0,
+            edges: 0,
+        });
 
     // Query language breakdown from file_hashes
     let mut stmt = store
         .conn
-        .prepare("SELECT language, COUNT(*) FROM file_hashes GROUP BY language ORDER BY COUNT(*) DESC")
+        .prepare(
+            "SELECT language, COUNT(*) FROM file_hashes GROUP BY language ORDER BY COUNT(*) DESC",
+        )
         .unwrap();
     let rows: Vec<(String, i64)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -414,14 +437,17 @@ fn cmd_languages(db_path: &str) {
 fn cmd_git_hooks(action: &str, directory: &str) {
     match action {
         "install" => {
-            if let Err(e) = codegraph_mcp::hooks::git_hooks::install_git_post_commit_hook(directory) {
+            if let Err(e) = codegraph_mcp::hooks::git_hooks::install_git_post_commit_hook(directory)
+            {
                 eprintln!("Error: {}", e);
                 process::exit(1);
             }
             println!("Git post-commit hook installed.");
         }
         "uninstall" => {
-            if let Err(e) = codegraph_mcp::hooks::git_hooks::uninstall_git_post_commit_hook(directory) {
+            if let Err(e) =
+                codegraph_mcp::hooks::git_hooks::uninstall_git_post_commit_hook(directory)
+            {
                 eprintln!("Error: {}", e);
                 process::exit(1);
             }

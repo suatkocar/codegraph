@@ -257,7 +257,9 @@ impl CodeGraphServer {
     async fn codegraph_impact(
         &self,
         #[tool(param)]
-        #[schemars(description = "File path to analyze impact for (analyzes all symbols in the file)")]
+        #[schemars(
+            description = "File path to analyze impact for (analyzes all symbols in the file)"
+        )]
         file_path: Option<String>,
         #[tool(param)]
         #[schemars(description = "Symbol name or node ID to analyze impact for")]
@@ -362,7 +364,9 @@ impl CodeGraphServer {
     async fn codegraph_structure(
         &self,
         #[tool(param)]
-        #[schemars(description = "Scope to a specific directory or file path (default: entire project)")]
+        #[schemars(
+            description = "Scope to a specific directory or file path (default: entire project)"
+        )]
         path: Option<String>,
         #[tool(param)]
         #[schemars(description = "Number of top symbols to return per category (default 10)")]
@@ -382,7 +386,10 @@ impl CodeGraphServer {
         };
 
         let scoped_nodes: Vec<&CodeNode> = if let Some(ref p) = path {
-            all_nodes.iter().filter(|n| n.file_path.starts_with(p)).collect()
+            all_nodes
+                .iter()
+                .filter(|n| n.file_path.starts_with(p))
+                .collect()
         } else {
             all_nodes.iter().collect()
         };
@@ -403,7 +410,11 @@ impl CodeGraphServer {
         for node in &scoped_nodes {
             all_files.insert(node.file_path.clone());
             let parts: Vec<&str> = node.file_path.rsplitn(2, '/').collect();
-            let dir = if parts.len() > 1 { parts[1].to_string() } else { ".".to_string() };
+            let dir = if parts.len() > 1 {
+                parts[1].to_string()
+            } else {
+                ".".to_string()
+            };
             let files = files_by_dir.entry(dir).or_default();
             if !files.contains(&node.file_path) {
                 files.push(node.file_path.clone());
@@ -446,9 +457,7 @@ impl CodeGraphServer {
         // Modules
         let mut modules: Vec<serde_json::Value> = files_by_dir
             .iter()
-            .map(|(dir, files)| {
-                serde_json::json!({"directory": dir, "fileCount": files.len()})
-            })
+            .map(|(dir, files)| serde_json::json!({"directory": dir, "fileCount": files.len()}))
             .collect();
         modules.sort_by(|a, b| {
             b["fileCount"]
@@ -518,9 +527,7 @@ impl CodeGraphServer {
 
                 let test_files: Vec<serde_json::Value> = by_file
                     .into_iter()
-                    .map(|(fp, symbols)| {
-                        serde_json::json!({"filePath": fp, "symbols": symbols})
-                    })
+                    .map(|(fp, symbols)| serde_json::json!({"filePath": fp, "symbols": symbols}))
                     .collect();
 
                 json_text(&serde_json::json!({
@@ -544,7 +551,9 @@ impl CodeGraphServer {
         #[schemars(description = "Natural language question or topic to gather context for")]
         query: String,
         #[tool(param)]
-        #[schemars(description = "Token budget for the context document (default 8000, max 100000)")]
+        #[schemars(
+            description = "Token budget for the context document (default 8000, max 100000)"
+        )]
         budget: Option<usize>,
     ) -> String {
         let store = self.store.lock().unwrap();
@@ -626,8 +635,10 @@ impl CodeGraphServer {
             }
 
             // Build file-level diagram
-            let node_file_map: HashMap<&str, &str> =
-                all_nodes.iter().map(|n| (n.id.as_str(), n.file_path.as_str())).collect();
+            let node_file_map: HashMap<&str, &str> = all_nodes
+                .iter()
+                .map(|n| (n.id.as_str(), n.file_path.as_str()))
+                .collect();
 
             let mut file_edges: HashMap<&str, HashSet<&str>> = HashMap::new();
             for edge in &all_edges {
@@ -722,7 +733,9 @@ impl CodeGraphServer {
     async fn codegraph_dead_code(
         &self,
         #[tool(param)]
-        #[schemars(description = "Filter by symbol kinds (comma-separated, e.g. 'function,class'). If omitted, all kinds are checked.")]
+        #[schemars(
+            description = "Filter by symbol kinds (comma-separated, e.g. 'function,class'). If omitted, all kinds are checked."
+        )]
         kinds: Option<String>,
         #[tool(param)]
         #[schemars(description = "Include exported symbols in results (default false)")]
@@ -754,12 +767,15 @@ impl CodeGraphServer {
         // Group by file for a cleaner output
         let mut by_file: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
         for r in &results {
-            by_file.entry(r.file_path.clone()).or_default().push(serde_json::json!({
-                "id": r.id,
-                "name": r.name,
-                "kind": r.kind,
-                "line": r.start_line,
-            }));
+            by_file
+                .entry(r.file_path.clone())
+                .or_default()
+                .push(serde_json::json!({
+                    "id": r.id,
+                    "name": r.name,
+                    "kind": r.kind,
+                    "line": r.start_line,
+                }));
         }
 
         let mut files: Vec<serde_json::Value> = by_file
@@ -782,7 +798,9 @@ impl CodeGraphServer {
     async fn codegraph_frameworks(
         &self,
         #[tool(param)]
-        #[schemars(description = "Project directory to scan for manifests (defaults to the indexed project root)")]
+        #[schemars(
+            description = "Project directory to scan for manifests (defaults to the indexed project root)"
+        )]
         project_dir: Option<String>,
     ) -> String {
         // Determine the project directory from the store's indexed files if not provided
@@ -818,13 +836,15 @@ impl CodeGraphServer {
 
         let entries: Vec<serde_json::Value> = frameworks
             .iter()
-            .map(|f| serde_json::json!({
-                "name": f.name,
-                "version": f.version,
-                "language": f.language,
-                "category": f.category,
-                "confidence": f.confidence,
-            }))
+            .map(|f| {
+                serde_json::json!({
+                    "name": f.name,
+                    "version": f.version,
+                    "language": f.language,
+                    "category": f.category,
+                    "confidence": f.confidence,
+                })
+            })
             .collect();
 
         json_text(&serde_json::json!({
@@ -1170,9 +1190,30 @@ mod tests {
             let store = server.store.lock().unwrap();
             store
                 .upsert_nodes(&[
-                    make_node_with_lang("n1", "foo", "src/a.ts", NodeKind::Function, 1, Language::TypeScript),
-                    make_node_with_lang("n2", "bar", "src/a.ts", NodeKind::Function, 10, Language::TypeScript),
-                    make_node_with_lang("n3", "baz", "src/b.py", NodeKind::Function, 1, Language::Python),
+                    make_node_with_lang(
+                        "n1",
+                        "foo",
+                        "src/a.ts",
+                        NodeKind::Function,
+                        1,
+                        Language::TypeScript,
+                    ),
+                    make_node_with_lang(
+                        "n2",
+                        "bar",
+                        "src/a.ts",
+                        NodeKind::Function,
+                        10,
+                        Language::TypeScript,
+                    ),
+                    make_node_with_lang(
+                        "n3",
+                        "baz",
+                        "src/b.py",
+                        NodeKind::Function,
+                        1,
+                        Language::Python,
+                    ),
                 ])
                 .unwrap();
             store
@@ -1223,8 +1264,22 @@ mod tests {
             let store = server.store.lock().unwrap();
             store
                 .upsert_nodes(&[
-                    make_node_with_lang("n1", "foo", "src/a.rs", NodeKind::Function, 1, Language::Rust),
-                    make_node_with_lang("n2", "bar", "src/b.rs", NodeKind::Function, 1, Language::Rust),
+                    make_node_with_lang(
+                        "n1",
+                        "foo",
+                        "src/a.rs",
+                        NodeKind::Function,
+                        1,
+                        Language::Rust,
+                    ),
+                    make_node_with_lang(
+                        "n2",
+                        "bar",
+                        "src/b.rs",
+                        NodeKind::Function,
+                        1,
+                        Language::Rust,
+                    ),
                 ])
                 .unwrap();
         }

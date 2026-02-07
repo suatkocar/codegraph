@@ -233,9 +233,7 @@ fn read_json_or_empty_object(path: &Path) -> Result<Value> {
 /// collisions but preserving non-colliding keys). Otherwise `root[key]` is
 /// replaced entirely.
 fn merge_object_key(root: &mut Value, key: &str, value: Value) {
-    let map = root
-        .as_object_mut()
-        .expect("root is always an object");
+    let map = root.as_object_mut().expect("root is always an object");
 
     match (map.get_mut(key), &value) {
         (Some(existing), Value::Object(new_entries)) if existing.is_object() => {
@@ -278,7 +276,12 @@ mod tests {
             assert!(content.contains("codegraph-mcp"));
 
             let mode = fs::metadata(&path).unwrap().permissions().mode();
-            assert_eq!(mode & 0o777, 0o755, "wrong permissions on {}", hook.filename);
+            assert_eq!(
+                mode & 0o777,
+                0o755,
+                "wrong permissions on {}",
+                hook.filename
+            );
         }
     }
 
@@ -367,8 +370,14 @@ mod tests {
 
         let parsed: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
         assert_eq!(parsed["theme"], json!("dark"));
-        assert!(parsed["hooks"]["Custom"].is_array(), "Custom hook preserved");
-        assert!(parsed["hooks"]["SessionStart"].is_array(), "SessionStart added");
+        assert!(
+            parsed["hooks"]["Custom"].is_array(),
+            "Custom hook preserved"
+        );
+        assert!(
+            parsed["hooks"]["SessionStart"].is_array(),
+            "SessionStart added"
+        );
     }
 
     // -- .mcp.json merge tests --------------------------------------------
@@ -408,8 +417,14 @@ mod tests {
         merge_mcp_config(&mcp, "codegraph-mcp").unwrap();
 
         let parsed: Value = serde_json::from_str(&fs::read_to_string(&mcp).unwrap()).unwrap();
-        assert!(parsed["mcpServers"]["other-tool"].is_object(), "other-tool preserved");
-        assert!(parsed["mcpServers"]["codegraph"].is_object(), "codegraph added");
+        assert!(
+            parsed["mcpServers"]["other-tool"].is_object(),
+            "other-tool preserved"
+        );
+        assert!(
+            parsed["mcpServers"]["codegraph"].is_object(),
+            "codegraph added"
+        );
     }
 
     // -- Full integration test --------------------------------------------
@@ -436,10 +451,9 @@ mod tests {
         assert!(settings["hooks"]["PostToolUse"][0]["matcher"] == "Write|Edit");
 
         // .mcp.json has codegraph server
-        let mcp: Value = serde_json::from_str(
-            &fs::read_to_string(tmp.path().join(".mcp.json")).unwrap(),
-        )
-        .unwrap();
+        let mcp: Value =
+            serde_json::from_str(&fs::read_to_string(tmp.path().join(".mcp.json")).unwrap())
+                .unwrap();
         assert_eq!(mcp["mcpServers"]["codegraph"]["command"], "codegraph-mcp");
     }
 
@@ -456,6 +470,9 @@ mod tests {
         .unwrap();
 
         // SessionStart should still be an array with exactly one entry (not duplicated)
-        assert_eq!(settings["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            settings["hooks"]["SessionStart"].as_array().unwrap().len(),
+            1
+        );
     }
 }

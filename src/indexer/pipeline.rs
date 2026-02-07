@@ -342,8 +342,14 @@ impl<'a> IndexingPipeline<'a> {
         }
         let node_index = build_node_index(&all_nodes);
 
-        let edges =
-            Extractor::extract_edges(&tree, &rel_path, language, &source_text, &nodes, &node_index)?;
+        let edges = Extractor::extract_edges(
+            &tree,
+            &rel_path,
+            language,
+            &source_text,
+            &nodes,
+            &node_index,
+        )?;
 
         self.store.replace_file_data(&rel_path, &nodes, &edges)?;
         self.upsert_file_hash(&rel_path, &content_hash, language)?;
@@ -372,19 +378,22 @@ impl<'a> IndexingPipeline<'a> {
     /// Called once before the parallel section to avoid DB access from rayon threads.
     fn load_all_file_hashes(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
-        let result = self.store.conn.prepare(
-            "SELECT file_path, content_hash FROM file_hashes",
-        );
+        let result = self
+            .store
+            .conn
+            .prepare("SELECT file_path, content_hash FROM file_hashes");
         if let Ok(mut stmt) = result {
-            let _ = stmt.query_map([], |row| {
-                let path: String = row.get(0)?;
-                let hash: String = row.get(1)?;
-                Ok((path, hash))
-            }).map(|rows| {
-                for row in rows.flatten() {
-                    map.insert(row.0, row.1);
-                }
-            });
+            let _ = stmt
+                .query_map([], |row| {
+                    let path: String = row.get(0)?;
+                    let hash: String = row.get(1)?;
+                    Ok((path, hash))
+                })
+                .map(|rows| {
+                    for row in rows.flatten() {
+                        map.insert(row.0, row.1);
+                    }
+                });
         }
         map
     }
@@ -395,15 +404,21 @@ impl<'a> IndexingPipeline<'a> {
         content_hash: &str,
         language: Language,
     ) -> Result<()> {
-        self.store.conn.prepare_cached(
-            "INSERT INTO file_hashes (file_path, content_hash, language)
+        self.store
+            .conn
+            .prepare_cached(
+                "INSERT INTO file_hashes (file_path, content_hash, language)
              VALUES (?1, ?2, ?3)
              ON CONFLICT(file_path) DO UPDATE SET
                content_hash = excluded.content_hash,
                indexed_at = datetime('now'),
                language = excluded.language",
-        )?
-        .execute(rusqlite::params![file_path, content_hash, language.as_str()])?;
+            )?
+            .execute(rusqlite::params![
+                file_path,
+                content_hash,
+                language.as_str()
+            ])?;
         Ok(())
     }
 

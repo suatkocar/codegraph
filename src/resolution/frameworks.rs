@@ -35,55 +35,233 @@ struct FrameworkDef {
 }
 
 const JS_FRAMEWORKS: &[FrameworkDef] = &[
-    FrameworkDef { name: "React", dep_key: "react", language: "javascript", category: "web", confidence: 0.95 },
-    FrameworkDef { name: "Next.js", dep_key: "next", language: "javascript", category: "web", confidence: 0.95 },
-    FrameworkDef { name: "Vue", dep_key: "vue", language: "javascript", category: "web", confidence: 0.95 },
-    FrameworkDef { name: "Angular", dep_key: "@angular/core", language: "javascript", category: "web", confidence: 0.95 },
-    FrameworkDef { name: "Express", dep_key: "express", language: "javascript", category: "api", confidence: 0.90 },
-    FrameworkDef { name: "Svelte", dep_key: "svelte", language: "javascript", category: "web", confidence: 0.95 },
-    FrameworkDef { name: "Nest.js", dep_key: "@nestjs/core", language: "javascript", category: "api", confidence: 0.90 },
-    FrameworkDef { name: "Jest", dep_key: "jest", language: "javascript", category: "testing", confidence: 0.85 },
-    FrameworkDef { name: "Mocha", dep_key: "mocha", language: "javascript", category: "testing", confidence: 0.85 },
-    FrameworkDef { name: "Vitest", dep_key: "vitest", language: "javascript", category: "testing", confidence: 0.85 },
+    FrameworkDef {
+        name: "React",
+        dep_key: "react",
+        language: "javascript",
+        category: "web",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Next.js",
+        dep_key: "next",
+        language: "javascript",
+        category: "web",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Vue",
+        dep_key: "vue",
+        language: "javascript",
+        category: "web",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Angular",
+        dep_key: "@angular/core",
+        language: "javascript",
+        category: "web",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Express",
+        dep_key: "express",
+        language: "javascript",
+        category: "api",
+        confidence: 0.90,
+    },
+    FrameworkDef {
+        name: "Svelte",
+        dep_key: "svelte",
+        language: "javascript",
+        category: "web",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Nest.js",
+        dep_key: "@nestjs/core",
+        language: "javascript",
+        category: "api",
+        confidence: 0.90,
+    },
+    FrameworkDef {
+        name: "Jest",
+        dep_key: "jest",
+        language: "javascript",
+        category: "testing",
+        confidence: 0.85,
+    },
+    FrameworkDef {
+        name: "Mocha",
+        dep_key: "mocha",
+        language: "javascript",
+        category: "testing",
+        confidence: 0.85,
+    },
+    FrameworkDef {
+        name: "Vitest",
+        dep_key: "vitest",
+        language: "javascript",
+        category: "testing",
+        confidence: 0.85,
+    },
 ];
 
 const RUST_FRAMEWORKS: &[FrameworkDef] = &[
-    FrameworkDef { name: "Actix Web", dep_key: "actix-web", language: "rust", category: "api", confidence: 0.95 },
-    FrameworkDef { name: "Axum", dep_key: "axum", language: "rust", category: "api", confidence: 0.95 },
-    FrameworkDef { name: "Rocket", dep_key: "rocket", language: "rust", category: "api", confidence: 0.95 },
-    FrameworkDef { name: "Tokio", dep_key: "tokio", language: "rust", category: "runtime", confidence: 0.90 },
-    FrameworkDef { name: "Serde", dep_key: "serde", language: "rust", category: "serialization", confidence: 0.85 },
-    FrameworkDef { name: "Diesel", dep_key: "diesel", language: "rust", category: "orm", confidence: 0.90 },
-    FrameworkDef { name: "SQLx", dep_key: "sqlx", language: "rust", category: "orm", confidence: 0.90 },
+    FrameworkDef {
+        name: "Actix Web",
+        dep_key: "actix-web",
+        language: "rust",
+        category: "api",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Axum",
+        dep_key: "axum",
+        language: "rust",
+        category: "api",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Rocket",
+        dep_key: "rocket",
+        language: "rust",
+        category: "api",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Tokio",
+        dep_key: "tokio",
+        language: "rust",
+        category: "runtime",
+        confidence: 0.90,
+    },
+    FrameworkDef {
+        name: "Serde",
+        dep_key: "serde",
+        language: "rust",
+        category: "serialization",
+        confidence: 0.85,
+    },
+    FrameworkDef {
+        name: "Diesel",
+        dep_key: "diesel",
+        language: "rust",
+        category: "orm",
+        confidence: 0.90,
+    },
+    FrameworkDef {
+        name: "SQLx",
+        dep_key: "sqlx",
+        language: "rust",
+        category: "orm",
+        confidence: 0.90,
+    },
 ];
 
 const GO_FRAMEWORKS: &[FrameworkDef] = &[
-    FrameworkDef { name: "Gin", dep_key: "github.com/gin-gonic/gin", language: "go", category: "api", confidence: 0.95 },
-    FrameworkDef { name: "Echo", dep_key: "github.com/labstack/echo", language: "go", category: "api", confidence: 0.95 },
-    FrameworkDef { name: "Fiber", dep_key: "github.com/gofiber/fiber", language: "go", category: "api", confidence: 0.95 },
+    FrameworkDef {
+        name: "Gin",
+        dep_key: "github.com/gin-gonic/gin",
+        language: "go",
+        category: "api",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Echo",
+        dep_key: "github.com/labstack/echo",
+        language: "go",
+        category: "api",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Fiber",
+        dep_key: "github.com/gofiber/fiber",
+        language: "go",
+        category: "api",
+        confidence: 0.95,
+    },
 ];
 
 const PYTHON_DEPS: &[FrameworkDef] = &[
-    FrameworkDef { name: "Django", dep_key: "django", language: "python", category: "web", confidence: 0.95 },
-    FrameworkDef { name: "Flask", dep_key: "flask", language: "python", category: "api", confidence: 0.90 },
-    FrameworkDef { name: "FastAPI", dep_key: "fastapi", language: "python", category: "api", confidence: 0.95 },
-    FrameworkDef { name: "Pytest", dep_key: "pytest", language: "python", category: "testing", confidence: 0.85 },
+    FrameworkDef {
+        name: "Django",
+        dep_key: "django",
+        language: "python",
+        category: "web",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Flask",
+        dep_key: "flask",
+        language: "python",
+        category: "api",
+        confidence: 0.90,
+    },
+    FrameworkDef {
+        name: "FastAPI",
+        dep_key: "fastapi",
+        language: "python",
+        category: "api",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Pytest",
+        dep_key: "pytest",
+        language: "python",
+        category: "testing",
+        confidence: 0.85,
+    },
 ];
 
 const RUBY_DEPS: &[FrameworkDef] = &[
-    FrameworkDef { name: "Rails", dep_key: "rails", language: "ruby", category: "web", confidence: 0.95 },
-    FrameworkDef { name: "Sinatra", dep_key: "sinatra", language: "ruby", category: "api", confidence: 0.90 },
-    FrameworkDef { name: "RSpec", dep_key: "rspec", language: "ruby", category: "testing", confidence: 0.85 },
+    FrameworkDef {
+        name: "Rails",
+        dep_key: "rails",
+        language: "ruby",
+        category: "web",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Sinatra",
+        dep_key: "sinatra",
+        language: "ruby",
+        category: "api",
+        confidence: 0.90,
+    },
+    FrameworkDef {
+        name: "RSpec",
+        dep_key: "rspec",
+        language: "ruby",
+        category: "testing",
+        confidence: 0.85,
+    },
 ];
 
 const PHP_DEPS: &[FrameworkDef] = &[
-    FrameworkDef { name: "Laravel", dep_key: "laravel/framework", language: "php", category: "web", confidence: 0.95 },
-    FrameworkDef { name: "Symfony", dep_key: "symfony/framework-bundle", language: "php", category: "web", confidence: 0.95 },
+    FrameworkDef {
+        name: "Laravel",
+        dep_key: "laravel/framework",
+        language: "php",
+        category: "web",
+        confidence: 0.95,
+    },
+    FrameworkDef {
+        name: "Symfony",
+        dep_key: "symfony/framework-bundle",
+        language: "php",
+        category: "web",
+        confidence: 0.95,
+    },
 ];
 
-const JAVA_DEPS: &[FrameworkDef] = &[
-    FrameworkDef { name: "Spring Boot", dep_key: "spring-boot", language: "java", category: "web", confidence: 0.90 },
-];
+const JAVA_DEPS: &[FrameworkDef] = &[FrameworkDef {
+    name: "Spring Boot",
+    dep_key: "spring-boot",
+    language: "java",
+    category: "web",
+    confidence: 0.90,
+}];
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -189,7 +367,11 @@ fn detect_from_package_json(path: &Path) -> Option<Vec<DetectedFramework>> {
         }
     }
 
-    if found.is_empty() { None } else { Some(found) }
+    if found.is_empty() {
+        None
+    } else {
+        Some(found)
+    }
 }
 
 /// Parse Cargo.toml and detect Rust frameworks from [dependencies].
@@ -209,7 +391,11 @@ fn detect_from_cargo_toml(path: &Path) -> Option<Vec<DetectedFramework>> {
         }
     }
 
-    if found.is_empty() { None } else { Some(found) }
+    if found.is_empty() {
+        None
+    } else {
+        Some(found)
+    }
 }
 
 /// Extract a dependency version from Cargo.toml content.
@@ -276,7 +462,11 @@ fn detect_from_go_mod(path: &Path) -> Option<Vec<DetectedFramework>> {
         }
     }
 
-    if found.is_empty() { None } else { Some(found) }
+    if found.is_empty() {
+        None
+    } else {
+        Some(found)
+    }
 }
 
 /// Parse requirements.txt and detect Python frameworks.
@@ -292,11 +482,17 @@ fn detect_from_requirements_txt(path: &Path) -> Option<Vec<DetectedFramework>> {
                 continue;
             }
             // Match package name at start: django==3.2 or django>=3.2
-            let pkg = trimmed.split(&['=', '>', '<', '!', '[', ';'][..]).next().unwrap_or("").trim();
+            let pkg = trimmed
+                .split(&['=', '>', '<', '!', '[', ';'][..])
+                .next()
+                .unwrap_or("")
+                .trim();
             if pkg == def.dep_key {
                 let version = trimmed
                     .split(&['=', '>', '<', '!'][..])
-                    .filter(|s| !s.is_empty() && s.chars().next().map_or(false, |c| c.is_ascii_digit()))
+                    .filter(|s| {
+                        !s.is_empty() && s.chars().next().map_or(false, |c| c.is_ascii_digit())
+                    })
                     .next()
                     .map(|v| v.trim().to_string());
                 found.push(DetectedFramework {
@@ -311,7 +507,11 @@ fn detect_from_requirements_txt(path: &Path) -> Option<Vec<DetectedFramework>> {
         }
     }
 
-    if found.is_empty() { None } else { Some(found) }
+    if found.is_empty() {
+        None
+    } else {
+        Some(found)
+    }
 }
 
 /// Parse pyproject.toml and detect Python frameworks from dependencies.
@@ -332,7 +532,11 @@ fn detect_from_pyproject_toml(path: &Path) -> Option<Vec<DetectedFramework>> {
         }
     }
 
-    if found.is_empty() { None } else { Some(found) }
+    if found.is_empty() {
+        None
+    } else {
+        Some(found)
+    }
 }
 
 /// Parse Gemfile and detect Ruby frameworks.
@@ -358,7 +562,11 @@ fn detect_from_gemfile(path: &Path) -> Option<Vec<DetectedFramework>> {
         }
     }
 
-    if found.is_empty() { None } else { Some(found) }
+    if found.is_empty() {
+        None
+    } else {
+        Some(found)
+    }
 }
 
 /// Extract version from a Gemfile `gem` line.
@@ -403,7 +611,11 @@ fn detect_from_composer_json(path: &Path) -> Option<Vec<DetectedFramework>> {
         }
     }
 
-    if found.is_empty() { None } else { Some(found) }
+    if found.is_empty() {
+        None
+    } else {
+        Some(found)
+    }
 }
 
 /// Parse pom.xml and detect Java frameworks (Spring Boot).
@@ -423,7 +635,11 @@ fn detect_from_pom_xml(path: &Path) -> Option<Vec<DetectedFramework>> {
         }
     }
 
-    if found.is_empty() { None } else { Some(found) }
+    if found.is_empty() {
+        None
+    } else {
+        Some(found)
+    }
 }
 
 /// Parse build.gradle and detect Java frameworks (Spring Boot).
@@ -443,7 +659,11 @@ fn detect_from_build_gradle(path: &Path) -> Option<Vec<DetectedFramework>> {
         }
     }
 
-    if found.is_empty() { None } else { Some(found) }
+    if found.is_empty() {
+        None
+    } else {
+        Some(found)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -466,12 +686,15 @@ mod tests {
 
     #[test]
     fn detects_react_from_package_json() {
-        let dir = setup_project("package.json", r#"{
+        let dir = setup_project(
+            "package.json",
+            r#"{
             "dependencies": {
                 "react": "^18.2.0",
                 "react-dom": "^18.2.0"
             }
-        }"#);
+        }"#,
+        );
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "React"));
@@ -484,11 +707,14 @@ mod tests {
 
     #[test]
     fn detects_express_from_package_json() {
-        let dir = setup_project("package.json", r#"{
+        let dir = setup_project(
+            "package.json",
+            r#"{
             "dependencies": {
                 "express": "^4.18.2"
             }
-        }"#);
+        }"#,
+        );
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "Express"));
@@ -498,14 +724,17 @@ mod tests {
 
     #[test]
     fn detects_next_and_jest_from_package_json() {
-        let dir = setup_project("package.json", r#"{
+        let dir = setup_project(
+            "package.json",
+            r#"{
             "dependencies": {
                 "next": "^14.0.0"
             },
             "devDependencies": {
                 "jest": "^29.0.0"
             }
-        }"#);
+        }"#,
+        );
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "Next.js"));
@@ -514,11 +743,14 @@ mod tests {
 
     #[test]
     fn detects_angular_from_package_json() {
-        let dir = setup_project("package.json", r#"{
+        let dir = setup_project(
+            "package.json",
+            r#"{
             "dependencies": {
                 "@angular/core": "^17.0.0"
             }
-        }"#);
+        }"#,
+        );
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "Angular"));
@@ -526,11 +758,14 @@ mod tests {
 
     #[test]
     fn detects_vue_from_package_json() {
-        let dir = setup_project("package.json", r#"{
+        let dir = setup_project(
+            "package.json",
+            r#"{
             "dependencies": {
                 "vue": "^3.3.0"
             }
-        }"#);
+        }"#,
+        );
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "Vue"));
@@ -540,7 +775,9 @@ mod tests {
 
     #[test]
     fn detects_axum_from_cargo_toml() {
-        let dir = setup_project("Cargo.toml", r#"
+        let dir = setup_project(
+            "Cargo.toml",
+            r#"
 [package]
 name = "my-app"
 version = "0.1.0"
@@ -549,7 +786,8 @@ version = "0.1.0"
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
-"#);
+"#,
+        );
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "Axum"));
@@ -564,10 +802,13 @@ serde = { version = "1", features = ["derive"] }
 
     #[test]
     fn detects_actix_web_from_cargo_toml() {
-        let dir = setup_project("Cargo.toml", r#"
+        let dir = setup_project(
+            "Cargo.toml",
+            r#"
 [dependencies]
 actix-web = "4"
-"#);
+"#,
+        );
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "Actix Web"));
@@ -577,7 +818,9 @@ actix-web = "4"
 
     #[test]
     fn detects_gin_from_go_mod() {
-        let dir = setup_project("go.mod", r#"
+        let dir = setup_project(
+            "go.mod",
+            r#"
 module example.com/myapp
 
 go 1.21
@@ -585,7 +828,8 @@ go 1.21
 require (
     github.com/gin-gonic/gin v1.9.1
 )
-"#);
+"#,
+        );
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "Gin"));
@@ -627,12 +871,15 @@ require (
 
     #[test]
     fn detects_django_from_pyproject_toml() {
-        let dir = setup_project("pyproject.toml", r#"
+        let dir = setup_project(
+            "pyproject.toml",
+            r#"
 [project]
 dependencies = [
     "django>=4.2",
 ]
-"#);
+"#,
+        );
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "Django"));
@@ -642,12 +889,15 @@ dependencies = [
 
     #[test]
     fn detects_rails_from_gemfile() {
-        let dir = setup_project("Gemfile", r#"
+        let dir = setup_project(
+            "Gemfile",
+            r#"
 source 'https://rubygems.org'
 
 gem 'rails', '~> 7.0'
 gem 'pg'
-"#);
+"#,
+        );
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "Rails"));
@@ -668,11 +918,14 @@ gem 'pg'
 
     #[test]
     fn detects_laravel_from_composer_json() {
-        let dir = setup_project("composer.json", r#"{
+        let dir = setup_project(
+            "composer.json",
+            r#"{
             "require": {
                 "laravel/framework": "^10.0"
             }
-        }"#);
+        }"#,
+        );
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "Laravel"));
@@ -684,14 +937,17 @@ gem 'pg'
 
     #[test]
     fn detects_spring_boot_from_pom_xml() {
-        let dir = setup_project("pom.xml", r#"
+        let dir = setup_project(
+            "pom.xml",
+            r#"
 <project>
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
     </parent>
 </project>
-"#);
+"#,
+        );
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "Spring Boot"));
@@ -703,14 +959,17 @@ gem 'pg'
 
     #[test]
     fn detects_spring_boot_from_build_gradle() {
-        let dir = setup_project("build.gradle", r#"
+        let dir = setup_project(
+            "build.gradle",
+            r#"
 plugins {
     id 'org.springframework.boot' version '3.1.0'
 }
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
 }
-"#);
+"#,
+        );
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "Spring Boot"));
@@ -741,13 +1000,21 @@ dependencies {
     #[test]
     fn detects_multiple_ecosystems() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("package.json"), r#"{
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{
             "dependencies": { "react": "^18.0.0" }
-        }"#).unwrap();
-        fs::write(dir.path().join("Cargo.toml"), r#"
+        }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            r#"
 [dependencies]
 tokio = "1"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let results = detect_frameworks(dir.path().to_str().unwrap());
         assert!(results.iter().any(|f| f.name == "React"));

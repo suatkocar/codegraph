@@ -42,9 +42,7 @@ pub fn install_git_post_commit_hook(project_dir: &str) -> Result<()> {
     fs::create_dir_all(&hooks_dir)?;
 
     let hook_path = hooks_dir.join("post-commit");
-    let codegraph_line = format!(
-        "{MARKER}\ncodegraph-mcp index {project_dir} 2>/dev/null &"
-    );
+    let codegraph_line = format!("{MARKER}\ncodegraph-mcp index {project_dir} 2>/dev/null &");
 
     if hook_path.exists() {
         let content = fs::read_to_string(&hook_path)?;
@@ -65,7 +63,10 @@ pub fn install_git_post_commit_hook(project_dir: &str) -> Result<()> {
     }
 
     fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))?;
-    eprintln!("[codegraph] Installed post-commit hook at {}", hook_path.display());
+    eprintln!(
+        "[codegraph] Installed post-commit hook at {}",
+        hook_path.display()
+    );
     Ok(())
 }
 
@@ -174,9 +175,15 @@ mod tests {
         install_git_post_commit_hook(dir).unwrap();
 
         let content = fs::read_to_string(&hook).unwrap();
-        assert!(content.contains("echo 'existing hook'"), "existing content preserved");
+        assert!(
+            content.contains("echo 'existing hook'"),
+            "existing content preserved"
+        );
         assert!(content.contains(MARKER), "codegraph marker added");
-        assert!(content.contains("codegraph-mcp index"), "codegraph command added");
+        assert!(
+            content.contains("codegraph-mcp index"),
+            "codegraph command added"
+        );
     }
 
     #[test]
@@ -218,7 +225,10 @@ mod tests {
         let remaining = fs::read_to_string(&hook).unwrap();
         assert!(!remaining.contains(MARKER));
         assert!(!remaining.contains("codegraph-mcp index"));
-        assert!(remaining.contains("echo 'user stuff'"), "user content preserved");
+        assert!(
+            remaining.contains("echo 'user stuff'"),
+            "user content preserved"
+        );
     }
 
     #[test]

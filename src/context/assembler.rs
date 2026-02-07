@@ -69,10 +69,7 @@ impl<'a> ContextAssembler<'a> {
             limit: Some(10),
             ..Default::default()
         };
-        let search_results = self
-            .search
-            .search(query, &search_opts)
-            .unwrap_or_default();
+        let search_results = self.search.search(query, &search_opts).unwrap_or_default();
 
         let mut core_nodes: Vec<CodeNode> = Vec::new();
         let mut seen_ids: HashSet<String> = HashSet::new();
@@ -125,8 +122,7 @@ impl<'a> ContextAssembler<'a> {
         }
         extended_nodes.extend(sibling_nodes);
 
-        let extended_section =
-            self.build_extended_section(&extended_nodes, extended_budget);
+        let extended_section = self.build_extended_section(&extended_nodes, extended_budget);
 
         // -- 4. Background: project structure overview --------------------
         let background_section = self.build_background_section(background_budget);
@@ -141,16 +137,10 @@ impl<'a> ContextAssembler<'a> {
             sections.push(format!("## Related Symbols\n\n{}", near_section));
         }
         if !extended_section.is_empty() {
-            sections.push(format!(
-                "## Tests & Siblings\n\n{}",
-                extended_section
-            ));
+            sections.push(format!("## Tests & Siblings\n\n{}", extended_section));
         }
         if !background_section.is_empty() {
-            sections.push(format!(
-                "## Project Structure\n\n{}",
-                background_section
-            ));
+            sections.push(format!("## Project Structure\n\n{}", background_section));
         }
 
         if sections.is_empty() {
@@ -286,18 +276,15 @@ impl<'a> ContextAssembler<'a> {
     /// A node is considered test-related if its name contains "test" or
     /// "spec" (case-insensitive) **and** it has an edge connecting it to
     /// one of the core symbols.
-    fn find_related_tests(
-        &self,
-        core_nodes: &[CodeNode],
-        seen: &HashSet<String>,
-    ) -> Vec<CodeNode> {
+    fn find_related_tests(&self, core_nodes: &[CodeNode], seen: &HashSet<String>) -> Vec<CodeNode> {
         let mut tests: Vec<CodeNode> = Vec::new();
 
         // Collect all core IDs for fast lookup.
         let core_ids: HashSet<&str> = core_nodes.iter().map(|n| n.id.as_str()).collect();
 
         // Query for test/spec nodes.
-        let sql = "SELECT * FROM nodes WHERE LOWER(name) LIKE '%test%' OR LOWER(name) LIKE '%spec%'";
+        let sql =
+            "SELECT * FROM nodes WHERE LOWER(name) LIKE '%test%' OR LOWER(name) LIKE '%spec%'";
         let mut stmt = match self.conn.prepare(sql) {
             Ok(s) => s,
             Err(_) => return tests,
@@ -363,11 +350,7 @@ impl<'a> ContextAssembler<'a> {
     }
 
     /// Find sibling nodes: other nodes in the same files as `core_nodes`.
-    fn find_siblings(
-        &self,
-        core_nodes: &[CodeNode],
-        seen: &HashSet<String>,
-    ) -> Vec<CodeNode> {
+    fn find_siblings(&self, core_nodes: &[CodeNode], seen: &HashSet<String>) -> Vec<CodeNode> {
         let files: HashSet<&str> = core_nodes.iter().map(|n| n.file_path.as_str()).collect();
         let mut siblings: Vec<CodeNode> = Vec::new();
 
@@ -429,10 +412,7 @@ impl<'a> ContextAssembler<'a> {
 /// ```
 fn format_node_full(node: &CodeNode) -> String {
     let tag = language_tag(node.language.as_str());
-    let location = format!(
-        "{}:{}-{}",
-        node.file_path, node.start_line, node.end_line
-    );
+    let location = format!("{}:{}-{}", node.file_path, node.start_line, node.end_line);
     let header = format!(
         "### `{}` **{}** (`{}`)",
         node.kind.as_str(),
@@ -440,10 +420,7 @@ fn format_node_full(node: &CodeNode) -> String {
         location,
     );
 
-    let body = node
-        .body
-        .as_deref()
-        .unwrap_or("// source not available");
+    let body = node.body.as_deref().unwrap_or("// source not available");
 
     // Include documentation if present.
     let doc_line = node
@@ -452,10 +429,7 @@ fn format_node_full(node: &CodeNode) -> String {
         .map(|d| format!("\n> {}\n", d.lines().next().unwrap_or("")))
         .unwrap_or_default();
 
-    format!(
-        "{}{}\n\n```{}\n{}\n```",
-        header, doc_line, tag, body
-    )
+    format!("{}{}\n\n```{}\n{}\n```", header, doc_line, tag, body)
 }
 
 /// Format a node as a compact one-line signature.
@@ -503,8 +477,7 @@ mod tests {
 
     /// Spin up an in-memory store with the full schema applied.
     fn setup() -> GraphStore {
-        let conn =
-            initialize_database(":memory:").expect("schema init should succeed on :memory:");
+        let conn = initialize_database(":memory:").expect("schema init should succeed on :memory:");
         GraphStore::from_connection(conn)
     }
 
@@ -696,7 +669,13 @@ mod tests {
                 None,
             ))
             .unwrap();
-        store.upsert_edge(&make_edge("fn:a.ts:greet:1", "fn:a.ts:helper:10", EdgeKind::Calls)).unwrap();
+        store
+            .upsert_edge(&make_edge(
+                "fn:a.ts:greet:1",
+                "fn:a.ts:helper:10",
+                EdgeKind::Calls,
+            ))
+            .unwrap();
 
         let search = HybridSearch::new(&store.conn);
         let assembler = ContextAssembler::new(&store.conn, &search);
@@ -849,10 +828,6 @@ mod tests {
         // The output should be reasonably bounded. We allow some overshoot
         // because the first item in each tier is always included, but it
         // should not be wildly over budget.
-        assert!(
-            tokens < 300,
-            "Expected output tokens < 300, got {}",
-            tokens
-        );
+        assert!(tokens < 300, "Expected output tokens < 300, got {}", tokens);
     }
 }

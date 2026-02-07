@@ -117,9 +117,7 @@ fn load_sqlite_vec_extension() {
     use sqlite_vec::sqlite3_vec_init;
 
     unsafe {
-        sqlite3_auto_extension(Some(std::mem::transmute(
-            sqlite3_vec_init as *const (),
-        )));
+        sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
     }
 }
 

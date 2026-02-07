@@ -123,10 +123,7 @@ impl EmbeddingEngine {
 
         for (node, embedding) in nodes.iter().zip(embeddings.iter()) {
             // Store in embedding_cache (BLOB format)
-            let blob: Vec<u8> = embedding
-                .iter()
-                .flat_map(|f| f.to_le_bytes())
-                .collect();
+            let blob: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
 
             conn.execute(
                 "INSERT OR REPLACE INTO embedding_cache (node_id, embedding, model_version)

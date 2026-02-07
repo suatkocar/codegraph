@@ -113,11 +113,7 @@ impl<'a> HybridSearch<'a> {
     /// For short single-token queries the vector signal tends to
     /// dominate; for multi-word natural language questions both signals
     /// contribute.
-    pub fn search(
-        &self,
-        query: &str,
-        options: &SearchOptions,
-    ) -> Result<Vec<SearchResult>> {
+    pub fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let limit = options.limit.unwrap_or(20);
         // Fetch more candidates than needed so fusion has room to merge.
         let fetch_limit = limit * 3;
@@ -129,10 +125,7 @@ impl<'a> HybridSearch<'a> {
 
         // Apply optional filters.
         if let Some(ref lang) = options.language {
-            fused.retain(|r| {
-                self.get_node_language(&r.node_id)
-                    .as_deref() == Some(lang.as_str())
-            });
+            fused.retain(|r| self.get_node_language(&r.node_id).as_deref() == Some(lang.as_str()));
         }
         if let Some(ref node_type) = options.node_type {
             fused.retain(|r| r.kind == *node_type);
@@ -152,11 +145,7 @@ impl<'a> HybridSearch<'a> {
     /// Uses the built-in BM25 ranking (exposed as `rank`). Queries are
     /// sanitized: special FTS5 syntax characters are quoted to prevent
     /// user input from breaking the query.
-    pub fn search_by_keyword(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<SearchResult>> {
+    pub fn search_by_keyword(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
         let safe_query = sanitize_fts_query(query);
         if safe_query.is_empty() {
             return Ok(Vec::new());
@@ -179,13 +168,17 @@ impl<'a> HybridSearch<'a> {
         let mut results = Vec::new();
         for row_result in rows {
             let row = row_result?;
-            let snippet = build_snippet(&row.name, row.signature.as_deref(), row.doc_comment.as_deref());
+            let snippet = build_snippet(
+                &row.name,
+                row.signature.as_deref(),
+                row.doc_comment.as_deref(),
+            );
             results.push(SearchResult {
                 node_id: row.id,
                 name: row.name,
                 kind: row.kind,
                 file_path: row.file_path,
-                score: 0.0, // will be set by fusion
+                score: 0.0,                 // will be set by fusion
                 fts_score: Some(-row.rank), // FTS5 rank is negative; invert for display
                 vec_score: None,
                 snippet: Some(snippet),
@@ -203,11 +196,7 @@ impl<'a> HybridSearch<'a> {
     ///
     /// Returns an empty `Vec` if no embedder is provided or if the
     /// `vec_embeddings` table has no data.
-    pub fn search_by_similarity(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Vec<SearchResult> {
+    pub fn search_by_similarity(&self, query: &str, limit: usize) -> Vec<SearchResult> {
         #[cfg(feature = "embedding")]
         {
             // Try to get embedder; if unavailable, return empty
@@ -285,10 +274,7 @@ impl<'a> HybridSearch<'a> {
 
     /// Look up the language for a node (used for post-fusion filtering).
     fn get_node_language(&self, node_id: &str) -> Option<String> {
-        let mut stmt = self
-            .conn
-            .prepare_cached(GET_NODE_LANGUAGE_SQL)
-            .ok()?;
+        let mut stmt = self.conn.prepare_cached(GET_NODE_LANGUAGE_SQL).ok()?;
         stmt.query_row(params![node_id], |row| row.get::<_, String>(0))
             .ok()
     }
@@ -369,7 +355,12 @@ pub fn sanitize_fts_query(query: &str) -> String {
         .filter_map(|token| {
             let clean: String = token
                 .chars()
-                .filter(|c| !matches!(c, '*' | '"' | '(' | ')' | '{' | '}' | '[' | ']' | '^' | '~' | ':'))
+                .filter(|c| {
+                    !matches!(
+                        c,
+                        '*' | '"' | '(' | ')' | '{' | '}' | '[' | ']' | '^' | '~' | ':'
+                    )
+                })
                 .collect();
             if clean.is_empty() {
                 None
@@ -392,11 +383,7 @@ pub fn sanitize_fts_query(query: &str) -> String {
 /// Prefers the first line of documentation. Falls back to a compacted
 /// signature (truncated at 120 chars). As a last resort, returns the
 /// bare name.
-pub fn build_snippet(
-    name: &str,
-    signature: Option<&str>,
-    doc_comment: Option<&str>,
-) -> String {
+pub fn build_snippet(name: &str, signature: Option<&str>, doc_comment: Option<&str>) -> String {
     if let Some(doc) = doc_comment {
         let first_line = doc.lines().next().unwrap_or("").trim();
         if !first_line.is_empty() {
@@ -433,8 +420,7 @@ mod tests {
 
     /// Spin up an in-memory store with the full schema applied.
     fn setup() -> GraphStore {
-        let conn =
-            initialize_database(":memory:").expect("schema init should succeed on :memory:");
+        let conn = initialize_database(":memory:").expect("schema init should succeed on :memory:");
         GraphStore::from_connection(conn)
     }
 
@@ -499,7 +485,11 @@ mod tests {
 
     #[test]
     fn build_snippet_prefers_doc_comment() {
-        let snippet = build_snippet("foo", Some("fn foo(x: i32) -> bool"), Some("Check something.\nMore details."));
+        let snippet = build_snippet(
+            "foo",
+            Some("fn foo(x: i32) -> bool"),
+            Some("Check something.\nMore details."),
+        );
         assert_eq!(snippet, "Check something.");
     }
 

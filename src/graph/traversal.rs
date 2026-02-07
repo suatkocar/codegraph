@@ -245,9 +245,7 @@ impl<'a> GraphTraversal<'a> {
         for (source, target) in &edge_pairs {
             all_nodes.insert(source.clone());
             all_nodes.insert(target.clone());
-            adj.entry(source.clone())
-                .or_default()
-                .push(target.clone());
+            adj.entry(source.clone()).or_default().push(target.clone());
         }
 
         // Tarjan's strongly connected components (iterative to avoid stack
@@ -364,8 +362,7 @@ impl<'a> GraphTraversal<'a> {
             row_to_code_node,
         )?;
 
-        let nodes: Vec<CodeNode> = rows
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let nodes: Vec<CodeNode> = rows.collect::<std::result::Result<Vec<_>, _>>()?;
 
         let node_set: HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
 
@@ -387,7 +384,8 @@ impl<'a> GraphTraversal<'a> {
         let mut edge_stmt = self.store.conn.prepare(&edge_sql)?;
 
         // Bind parameters: first set for source_id IN, second set for target_id IN.
-        let mut param_values: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(node_ids.len() * 2);
+        let mut param_values: Vec<&dyn rusqlite::types::ToSql> =
+            Vec::with_capacity(node_ids.len() * 2);
         for id in &node_ids {
             param_values.push(id);
         }
@@ -396,8 +394,7 @@ impl<'a> GraphTraversal<'a> {
         }
 
         let edge_rows = edge_stmt.query_and_then(param_values.as_slice(), row_to_code_edge)?;
-        let edges: Vec<CodeEdge> = edge_rows
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let edges: Vec<CodeEdge> = edge_rows.collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(Neighborhood { nodes, edges })
     }
@@ -558,14 +555,32 @@ mod tests {
         store
             .upsert_nodes(&[
                 make_node("fn1", "doWork", "src/worker.ts", NodeKind::Function, 1),
-                make_node("test1", "testDoWork", "src/__tests__/worker.test.ts", NodeKind::Function, 1),
-                make_node("test2", "doWorkTest", "src/worker.spec.ts", NodeKind::Function, 1),
+                make_node(
+                    "test1",
+                    "testDoWork",
+                    "src/__tests__/worker.test.ts",
+                    NodeKind::Function,
+                    1,
+                ),
+                make_node(
+                    "test2",
+                    "doWorkTest",
+                    "src/worker.spec.ts",
+                    NodeKind::Function,
+                    1,
+                ),
                 make_node("other", "helper", "src/helper.ts", NodeKind::Function, 1),
             ])
             .unwrap();
         store
             .upsert_edges(&[
-                make_edge("test1", "fn1", EdgeKind::Calls, "src/__tests__/worker.test.ts", 5),
+                make_edge(
+                    "test1",
+                    "fn1",
+                    EdgeKind::Calls,
+                    "src/__tests__/worker.test.ts",
+                    5,
+                ),
                 make_edge("test2", "fn1", EdgeKind::Calls, "src/worker.spec.ts", 5),
                 make_edge("other", "fn1", EdgeKind::Calls, "src/helper.ts", 3),
             ])
@@ -649,10 +664,19 @@ mod tests {
         let neighborhood = traversal.get_neighborhood("b", 1).unwrap();
 
         let node_ids: Vec<&str> = neighborhood.nodes.iter().map(|n| n.id.as_str()).collect();
-        assert!(node_ids.contains(&"a"), "should include incoming neighbor a");
+        assert!(
+            node_ids.contains(&"a"),
+            "should include incoming neighbor a"
+        );
         assert!(node_ids.contains(&"b"), "should include the center node b");
-        assert!(node_ids.contains(&"c"), "should include outgoing neighbor c");
-        assert!(!node_ids.contains(&"d"), "d is 2 hops away, beyond radius 1");
+        assert!(
+            node_ids.contains(&"c"),
+            "should include outgoing neighbor c"
+        );
+        assert!(
+            !node_ids.contains(&"d"),
+            "d is 2 hops away, beyond radius 1"
+        );
 
         // Edges between those nodes: a->b and b->c
         assert_eq!(neighborhood.edges.len(), 2);

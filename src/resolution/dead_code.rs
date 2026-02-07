@@ -173,7 +173,10 @@ mod tests {
         // n2 (unusedFunc) and n3 (caller) have no incoming edges,
         // but n1 (usedFunc) is called by n3 so it should not appear
         let names: Vec<&str> = dead.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.contains(&"unusedFunc"), "unusedFunc should be dead code");
+        assert!(
+            names.contains(&"unusedFunc"),
+            "unusedFunc should be dead code"
+        );
         assert!(names.contains(&"caller"), "caller has no incoming edges");
         assert!(!names.contains(&"usedFunc"), "usedFunc is referenced");
     }
@@ -183,23 +186,50 @@ mod tests {
         let store = setup();
         store
             .upsert_nodes(&[
-                make_node("n1", "publicApi", "src/api.ts", NodeKind::Function, 1, Some(true)),
-                make_node("n2", "privateHelper", "src/api.ts", NodeKind::Function, 10, None),
+                make_node(
+                    "n1",
+                    "publicApi",
+                    "src/api.ts",
+                    NodeKind::Function,
+                    1,
+                    Some(true),
+                ),
+                make_node(
+                    "n2",
+                    "privateHelper",
+                    "src/api.ts",
+                    NodeKind::Function,
+                    10,
+                    None,
+                ),
             ])
             .unwrap();
 
         let dead = find_dead_code(&store.conn, &[]);
 
         let names: Vec<&str> = dead.iter().map(|d| d.name.as_str()).collect();
-        assert!(!names.contains(&"publicApi"), "exported symbols should be excluded");
-        assert!(names.contains(&"privateHelper"), "non-exported should be found");
+        assert!(
+            !names.contains(&"publicApi"),
+            "exported symbols should be excluded"
+        );
+        assert!(
+            names.contains(&"privateHelper"),
+            "non-exported should be found"
+        );
     }
 
     #[test]
     fn excludes_main_entry_point() {
         let store = setup();
         store
-            .upsert_node(&make_node("n1", "main", "src/main.ts", NodeKind::Function, 1, None))
+            .upsert_node(&make_node(
+                "n1",
+                "main",
+                "src/main.ts",
+                NodeKind::Function,
+                1,
+                None,
+            ))
             .unwrap();
 
         let dead = find_dead_code(&store.conn, &[]);
@@ -211,20 +241,44 @@ mod tests {
         let store = setup();
         store
             .upsert_nodes(&[
-                make_node("n1", "testSomething", "src/a.ts", NodeKind::Function, 1, None),
-                make_node("n2", "helper", "src/__tests__/a.test.ts", NodeKind::Function, 1, None),
+                make_node(
+                    "n1",
+                    "testSomething",
+                    "src/a.ts",
+                    NodeKind::Function,
+                    1,
+                    None,
+                ),
+                make_node(
+                    "n2",
+                    "helper",
+                    "src/__tests__/a.test.ts",
+                    NodeKind::Function,
+                    1,
+                    None,
+                ),
             ])
             .unwrap();
 
         let dead = find_dead_code(&store.conn, &[]);
-        assert!(dead.is_empty(), "test functions and test files should be excluded");
+        assert!(
+            dead.is_empty(),
+            "test functions and test files should be excluded"
+        );
     }
 
     #[test]
     fn excludes_module_nodes() {
         let store = setup();
         store
-            .upsert_node(&make_node("m1", "utils", "src/utils.ts", NodeKind::Module, 1, None))
+            .upsert_node(&make_node(
+                "m1",
+                "utils",
+                "src/utils.ts",
+                NodeKind::Module,
+                1,
+                None,
+            ))
             .unwrap();
 
         let dead = find_dead_code(&store.conn, &[]);
@@ -294,11 +348,18 @@ mod tests {
             ])
             .unwrap();
         // Mutual references — both have incoming edges
-        store.upsert_edge(&make_edge("n1", "n2", EdgeKind::Calls, "src/a.ts", 5)).unwrap();
-        store.upsert_edge(&make_edge("n2", "n1", EdgeKind::Calls, "src/b.ts", 5)).unwrap();
+        store
+            .upsert_edge(&make_edge("n1", "n2", EdgeKind::Calls, "src/a.ts", 5))
+            .unwrap();
+        store
+            .upsert_edge(&make_edge("n2", "n1", EdgeKind::Calls, "src/b.ts", 5))
+            .unwrap();
 
         let dead = find_dead_code(&store.conn, &[]);
-        assert!(dead.is_empty(), "mutually referenced nodes should not be dead");
+        assert!(
+            dead.is_empty(),
+            "mutually referenced nodes should not be dead"
+        );
     }
 
     #[test]
