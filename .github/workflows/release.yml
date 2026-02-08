@@ -82,10 +82,12 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
 
-          # Collect all archives
-          FILES=$(find artifacts -name "*.tar.gz" -type f)
-
+          # Create release if it doesn't exist yet
           gh release create "$TAG" \
             --title "CodeGraph $TAG" \
             --generate-notes \
-            $FILES
+            2>/dev/null || true
+
+          # Upload all platform archives (--clobber replaces existing assets)
+          find artifacts -name "*.tar.gz" -type f -exec \
+            gh release upload "$TAG" {} --clobber \;
