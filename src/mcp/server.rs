@@ -162,7 +162,7 @@ impl CodeGraphServer {
     // 1. codegraph_query — Hybrid keyword + semantic search
     #[tool(
         name = "codegraph_query",
-        description = "Search the code graph using hybrid keyword + semantic search. Returns ranked code snippets with file paths and relevance scores."
+        description = "Search the code graph using hybrid keyword + semantic search. Returns ranked code snippets with file paths and relevance scores. Use instead of Grep/Glob when searching for code symbols or concepts."
     )]
     async fn codegraph_query(
         &self,
@@ -192,7 +192,7 @@ impl CodeGraphServer {
     // 2. codegraph_dependencies — Forward dependency traversal
     #[tool(
         name = "codegraph_dependencies",
-        description = "Find all dependencies of a symbol (what it calls, imports, references, extends, or implements). Returns a dependency tree with depth levels."
+        description = "Find all dependencies of a symbol (what it calls, imports, references, extends, or implements). Returns a dependency tree with depth levels. Use instead of Explore agents to trace imports and dependencies."
     )]
     async fn codegraph_dependencies(
         &self,
@@ -230,7 +230,7 @@ impl CodeGraphServer {
     // 3. codegraph_callers — Reverse call graph traversal
     #[tool(
         name = "codegraph_callers",
-        description = "Find all callers of a symbol (who calls this function/method). Returns a caller tree with depth levels."
+        description = "Find all callers of a symbol (who calls this function/method). Returns a caller tree with depth levels. Use instead of Grep for caller analysis — 100% precise, no false positives."
     )]
     async fn codegraph_callers(
         &self,
@@ -268,7 +268,7 @@ impl CodeGraphServer {
     // 4. codegraph_callees — Forward call graph traversal
     #[tool(
         name = "codegraph_callees",
-        description = "Find all functions/methods that a symbol calls (forward call graph). Returns a callee tree with depth levels."
+        description = "Find all functions/methods that a symbol calls (forward call graph). Returns a callee tree with depth levels. Use instead of manual file reading to understand what a function calls."
     )]
     async fn codegraph_callees(
         &self,
@@ -306,7 +306,7 @@ impl CodeGraphServer {
     // 5. codegraph_impact — Blast radius analysis
     #[tool(
         name = "codegraph_impact",
-        description = "Analyze the blast radius of changing a file or symbol. Returns affected files and functions grouped by risk level."
+        description = "Analyze the blast radius of changing a file or symbol. Returns affected files and functions grouped by risk level. Use before refactoring to understand what might break."
     )]
     async fn codegraph_impact(
         &self,
@@ -413,7 +413,7 @@ impl CodeGraphServer {
     // 5. codegraph_structure — Project overview with PageRank
     #[tool(
         name = "codegraph_structure",
-        description = "Get a project overview: modules, key classes/functions, and dependency summary. Uses PageRank to identify the most important symbols."
+        description = "Get a project overview: modules, key classes/functions, and dependency summary. Uses PageRank to identify the most important symbols. Use instead of Explore agents for project overview."
     )]
     async fn codegraph_structure(
         &self,
@@ -597,7 +597,7 @@ impl CodeGraphServer {
     // 7. codegraph_context — 4-tier token-budgeted LLM context assembly
     #[tool(
         name = "codegraph_context",
-        description = "Assemble optimal context for Claude from the code graph. Uses a tiered approach (core -> near -> extended -> background) to pack the most relevant code within a token budget."
+        description = "Assemble optimal context for Claude from the code graph. Uses a tiered approach (core -> near -> extended -> background) to pack the most relevant code within a token budget. Use instead of reading multiple files — provides pre-ranked, token-budgeted context."
     )]
     async fn codegraph_context(
         &self,
@@ -743,7 +743,7 @@ impl CodeGraphServer {
     // 9. codegraph_node — Direct node lookup with full details
     #[tool(
         name = "codegraph_node",
-        description = "Look up a specific code symbol by name or ID and return its full details including source code, documentation, file location, and relationships."
+        description = "Look up a specific code symbol by name or ID and return its full details including source code, documentation, file location, and relationships. Use instead of Grep for exact symbol lookup."
     )]
     async fn codegraph_node(
         &self,
@@ -1072,7 +1072,7 @@ impl CodeGraphServer {
     // 14. codegraph_blame
     #[tool(
         name = "codegraph_blame",
-        description = "Show git blame for a file — line-by-line author, date, and commit hash."
+        description = "Show git blame for a file — line-by-line author, date, and commit hash. Use instead of running git blame via Bash."
     )]
     async fn codegraph_blame(
         &self,
@@ -1274,7 +1274,7 @@ impl CodeGraphServer {
     // 23. codegraph_scan_security
     #[tool(
         name = "codegraph_scan_security",
-        description = "Scan a directory for security vulnerabilities using YAML-based pattern matching rules."
+        description = "Scan a directory for security vulnerabilities using YAML-based pattern matching rules. Use instead of grep-based pattern matching for vulnerability detection."
     )]
     async fn codegraph_scan_security(
         &self,
@@ -1647,7 +1647,7 @@ impl CodeGraphServer {
     // 35. codegraph_find_references
     #[tool(
         name = "codegraph_find_references",
-        description = "Find all references to a symbol across the codebase (all edge types)."
+        description = "Find all references to a symbol across the codebase (all edge types). Use instead of Grep for cross-file reference search."
     )]
     async fn codegraph_find_references(
         &self,
@@ -1813,7 +1813,7 @@ impl CodeGraphServer {
     // 38. codegraph_file
     #[tool(
         name = "codegraph_file",
-        description = "Get all symbols defined in a specific file."
+        description = "Get all symbols defined in a specific file. Use before reading a file to understand its structure first."
     )]
     async fn codegraph_file(
         &self,
@@ -2038,7 +2038,12 @@ impl ServerHandler for CodeGraphServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "CodeGraph — codebase intelligence MCP server. Search, navigate, and analyze code with semantic graph queries.".into(),
+                "CodeGraph — codebase intelligence MCP server with 44 tools across 32 languages. \
+                 ALWAYS prefer CodeGraph tools over Grep/Glob/Explore agents for code analysis: \
+                 codegraph_query (semantic search), codegraph_dependencies (import tracing), \
+                 codegraph_callers (call graph), codegraph_find_references (cross-file refs), \
+                 codegraph_structure (project overview), codegraph_node (symbol lookup). \
+                 These use a pre-built AST index and return results in milliseconds.".into(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: rmcp::model::Implementation {

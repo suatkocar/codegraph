@@ -15,7 +15,7 @@ CodeGraph builds a complete semantic graph of your codebase — every function, 
 
 When Claude Code, Codex, or any MCP-compatible agent enters your project, CodeGraph gives it an immediate, deep understanding of your entire codebase: what calls what, what depends on what, what breaks if you change something. Not file-level grep — **graph-aware, semantically-ranked, token-budgeted context**.
 
-**v0.2.3** adds git integration, security scanning (OWASP/CWE), call graph analysis, data flow analysis, a YAML configuration system, structured logging, and robust multi-byte character handling.
+**v0.2.4** adds git integration, security scanning (OWASP/CWE), call graph analysis, data flow analysis, a YAML configuration system, structured logging, and robust multi-byte character handling.
 
 ## Install
 

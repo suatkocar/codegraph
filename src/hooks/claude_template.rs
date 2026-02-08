@@ -58,68 +58,41 @@ fn render_section(stats: &ProjectStats) -> String {
     format!(
         r#"{SECTION_HEADER}
 
-This project is indexed by CodeGraph (32 languages, 44 MCP tools). Use the tools below for code navigation instead of grep/glob — they understand your project's structure, dependencies, and call graphs.
+This project is indexed by CodeGraph. **Use CodeGraph MCP tools instead of Grep/Glob/Explore agents for code analysis.** The pre-built index provides instant, semantic, relationship-aware results.
 
-### Core (13 tools)
-- `codegraph_query "search term"` — Hybrid keyword + semantic search
-- `codegraph_dependencies "SymbolName"` — Forward dependency traversal
-- `codegraph_callers "functionName"` — Reverse call graph
-- `codegraph_callees "functionName"` — Forward call graph
-- `codegraph_impact "file.ts"` — Blast radius analysis
-- `codegraph_structure` — Project overview with PageRank-ranked symbols
-- `codegraph_tests "SymbolName"` — Test coverage discovery
-- `codegraph_context "task description"` — LLM context assembly (token-budgeted)
-- `codegraph_node "SymbolName"` — Direct symbol lookup with relationships
-- `codegraph_diagram "SymbolName"` — Mermaid diagram generation
-- `codegraph_dead_code` — Find unused symbols
-- `codegraph_frameworks` — Detect project frameworks
-- `codegraph_languages` — Language breakdown statistics
+### When to Use CodeGraph (Decision Matrix)
 
-### Git Integration (9 tools)
-- `codegraph_blame "file.rs"` — Line-by-line git blame
-- `codegraph_file_history "file.rs"` — File commit history
-- `codegraph_recent_changes` — Recent repository commits
-- `codegraph_commit_diff "abc123"` — Commit diff details
-- `codegraph_symbol_history "functionName"` — Symbol modification history
-- `codegraph_branch_info` — Branch status and tracking info
-- `codegraph_modified_files` — Working tree changes (staged/unstaged)
-- `codegraph_hotspots` — Churn-based hotspot detection
-- `codegraph_contributors` — Contributor statistics
+| Instead of... | Use this CodeGraph tool | Why |
+|---|---|---|
+| Grep/Glob for function definitions | `codegraph_query` | Semantic search, ranked by relevance |
+| Explore agent for dependency tracing | `codegraph_dependencies` | Instant dependency tree from index |
+| Grep for "who calls X" | `codegraph_callers` | 100% precision, no false positives |
+| Reading files to understand flow | `codegraph_find_path` | Shortest call path between two functions |
+| Manual file reading for context | `codegraph_context` | Token-budgeted, pre-ranked context assembly |
+| Grep for symbol lookup | `codegraph_node` | Direct lookup with relationships + source |
+| Explore agent for project overview | `codegraph_structure` | PageRank-ranked overview, instant |
+| Grep for references | `codegraph_find_references` | Cross-file, all edge types |
+| `git blame` / `git log` in Bash | `codegraph_blame` / `codegraph_file_history` | Structured output, faster |
+| Grep for security patterns | `codegraph_scan_security` | OWASP/CWE rules + taint analysis |
 
-### Security (9 tools)
-- `codegraph_scan_security` — YAML rule-based vulnerability scan
-- `codegraph_check_owasp` — OWASP Top 10 2021 scan
-- `codegraph_check_cwe` — CWE Top 25 scan
-- `codegraph_explain_vulnerability "CWE-89"` — CWE explanation + remediation
-- `codegraph_suggest_fix` — Fix suggestion for findings
-- `codegraph_find_injections` — SQL/XSS/command injection via taint analysis
-- `codegraph_taint_sources` — Identify taint sources in code
-- `codegraph_security_summary` — Comprehensive risk assessment
-- `codegraph_trace_taint "source"` — Data flow tracing from source to sink
+### Anti-Patterns (Don't Do This)
 
-### Repository & Analysis (7 tools)
-- `codegraph_stats` — Index statistics (nodes, edges, files)
-- `codegraph_circular_imports` — Cycle detection (Tarjan SCC)
-- `codegraph_project_tree` — Directory tree with symbol counts
-- `codegraph_find_references "symbol"` — Cross-reference search
-- `codegraph_export_map` — Module export listing
-- `codegraph_import_graph` — Import graph visualization
-- `codegraph_file "file.rs"` — File symbol listing
+- **Don't** launch Explore agents to trace code flow — use `codegraph_dependencies` + `codegraph_callers`
+- **Don't** grep for function names — use `codegraph_query` or `codegraph_node`
+- **Don't** read 10+ files to understand a module — use `codegraph_structure` + `codegraph_context`
+- **Don't** use `git log` via Bash — use `codegraph_file_history` or `codegraph_recent_changes`
 
-### Call Graph & Data Flow (6 tools)
-- `codegraph_find_path "fnA" "fnB"` — Shortest call path between functions
-- `codegraph_complexity` — Cyclomatic + cognitive complexity per function
-- `codegraph_data_flow "variable"` — Variable def-use chains
-- `codegraph_dead_stores` — Assignments never read
-- `codegraph_find_uninitialized` — Variables used before initialization
-- `codegraph_reaching_defs "variable"` — Reaching definition analysis
+### All 44 Tools
 
-**Prefer CodeGraph tools over grep/glob** for finding code. They understand your project's structure, dependencies, and call graphs — not just text matches.
+**Core (13):** codegraph_query, codegraph_dependencies, codegraph_callers, codegraph_callees, codegraph_impact, codegraph_structure, codegraph_tests, codegraph_context, codegraph_node, codegraph_diagram, codegraph_dead_code, codegraph_frameworks, codegraph_languages
+**Git (9):** codegraph_blame, codegraph_file_history, codegraph_recent_changes, codegraph_commit_diff, codegraph_symbol_history, codegraph_branch_info, codegraph_modified_files, codegraph_hotspots, codegraph_contributors
+**Security (9):** codegraph_scan_security, codegraph_check_owasp, codegraph_check_cwe, codegraph_explain_vulnerability, codegraph_suggest_fix, codegraph_find_injections, codegraph_taint_sources, codegraph_security_summary, codegraph_trace_taint
+**Analysis (7):** codegraph_stats, codegraph_circular_imports, codegraph_project_tree, codegraph_find_references, codegraph_export_map, codegraph_import_graph, codegraph_file
+**Data Flow (6):** codegraph_find_path, codegraph_complexity, codegraph_data_flow, codegraph_dead_stores, codegraph_find_uninitialized, codegraph_reaching_defs
 
 ### Project Stats
 - Languages: {languages}
-- Symbols: {nodes}
-- Relationships: {edges}
+- Symbols: {nodes} | Relationships: {edges}
 "#,
         languages = stats.language_breakdown(),
         nodes = stats.total_nodes,
@@ -388,5 +361,34 @@ mod tests {
         for tool in expected_tools {
             assert!(section.contains(tool), "missing tool: {tool}");
         }
+    }
+
+    #[test]
+    fn render_section_has_decision_matrix_and_anti_patterns() {
+        let section = render_section(&sample_stats());
+        assert!(
+            section.contains("Decision Matrix"),
+            "should have decision matrix"
+        );
+        assert!(
+            section.contains("Instead of"),
+            "should have 'Instead of' guidance"
+        );
+        assert!(
+            section.contains("Anti-Patterns"),
+            "should have anti-patterns section"
+        );
+        assert!(
+            section.contains("Don't"),
+            "should have anti-pattern guidance"
+        );
+        assert!(
+            section.contains("Grep/Glob/Explore"),
+            "should reference Grep/Glob/Explore alternatives"
+        );
+        assert!(
+            section.contains("Explore agent"),
+            "should reference Explore agent alternative"
+        );
     }
 }

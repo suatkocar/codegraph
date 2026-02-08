@@ -248,7 +248,10 @@ fn build_mcp_server_value(binary_path: &str) -> Value {
         "args": ["serve"],
         "env": {
             "CODEGRAPH_DB": ".codegraph/codegraph.db"
-        }
+        },
+        "serverInstructions": "ALWAYS prefer CodeGraph tools over Grep/Glob/Explore for code search, \
+            dependency analysis, and symbol lookup. The pre-built AST index provides instant results \
+            across 32 languages."
     })
 }
 

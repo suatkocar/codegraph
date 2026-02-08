@@ -115,7 +115,9 @@ pub fn handle_session_start() {
                         files: 0,
                     });
                 let message = format!(
-                    "CodeGraph: indexed {} files ({} nodes, {} edges) in {}ms",
+                    "CodeGraph: indexed {} files ({} nodes, {} edges) in {}ms. \
+                     Use codegraph_* MCP tools for code search, dependency tracing, and analysis \
+                     — they are faster and more precise than Grep/Glob/Explore.",
                     result.files_indexed, stats.nodes, stats.edges, elapsed,
                 );
                 tracing::info!("{message}");
@@ -466,7 +468,7 @@ pub fn handle_pre_tool_use() {
 
         // If the hint looks like a file path, look up symbols in that file.
         // Otherwise, do a hybrid search.
-        let context = if hint.contains('/') || hint.contains('.') {
+        let mut context = if hint.contains('/') || hint.contains('.') {
             // Try to find symbols in this file.
             let store = crate::graph::store::GraphStore::from_connection(conn);
             let rel_path = hint
@@ -510,6 +512,14 @@ pub fn handle_pre_tool_use() {
                 _ => String::new(),
             }
         };
+
+        // Append CodeGraph suggestion when agent uses Grep or Glob
+        if tool_name == "Grep" || tool_name == "Glob" {
+            context.push_str(
+                "\n\nTip: CodeGraph MCP tools (codegraph_query, codegraph_node, \
+                 codegraph_find_references) provide faster, semantic search from the pre-built index.",
+            );
+        }
 
         if context.len() < 20 {
             emit(json!({"continue": true}));
@@ -739,6 +749,7 @@ pub fn handle_post_tool_failure() {
                     }
                 }
                 ctx.push_str("\nThese symbols may be what you were looking for.\n");
+                ctx.push_str("Tip: Use codegraph_query or codegraph_node for faster, indexed symbol lookup.\n");
                 ctx
             }
             _ => String::new(),
