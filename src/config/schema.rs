@@ -31,6 +31,20 @@ pub struct CodeGraphConfig {
     /// Performance tuning knobs.
     #[serde(default)]
     pub performance: PerformanceConfig,
+
+    /// Directory context annotations.
+    ///
+    /// Maps path prefixes to human-readable descriptions that help
+    /// explain what code in a directory is about.
+    ///
+    /// ```yaml
+    /// contexts:
+    ///   "src/legacy": "Legacy v1 API, deprecated — do not modify"
+    ///   "src/services/auth": "Authentication service, security-critical"
+    ///   "tests/": "Test files, not production code"
+    /// ```
+    #[serde(default)]
+    pub contexts: HashMap<String, String>,
 }
 
 impl Default for CodeGraphConfig {
@@ -40,6 +54,7 @@ impl Default for CodeGraphConfig {
             preset: PresetName::Full,
             tools: ToolsConfig::default(),
             performance: PerformanceConfig::default(),
+            contexts: HashMap::new(),
         }
     }
 }
@@ -61,6 +76,21 @@ impl CodeGraphConfig {
             .get(tool_name)
             .map(|o| o.enabled)
             .unwrap_or(true)
+    }
+
+    /// Look up the most specific context annotation for a file path.
+    ///
+    /// Matches the longest path prefix in the `contexts` map. For example,
+    /// if both `"src"` and `"src/legacy"` are defined, a file at
+    /// `"src/legacy/old.ts"` matches `"src/legacy"`.
+    ///
+    /// Returns `None` if no prefix matches.
+    pub fn get_context_for_path(&self, path: &str) -> Option<&str> {
+        self.contexts
+            .iter()
+            .filter(|(prefix, _)| path.starts_with(prefix.as_str()))
+            .max_by_key(|(prefix, _)| prefix.len())
+            .map(|(_, desc)| desc.as_str())
     }
 }
 
@@ -302,6 +332,7 @@ mod tests {
                 max_tool_count: Some(30),
                 exclude_tests: true,
             },
+            contexts: std::collections::HashMap::new(),
         };
 
         let yaml = serde_yaml::to_string(&config).unwrap();
@@ -658,6 +689,79 @@ tools:
         fn preset_from_str_loose_never_panics(s in "\\PC{0,50}") {
             let _ = PresetName::from_str_loose(&s);
         }
+    }
+
+    // --- Contexts ---
+
+    #[test]
+    fn contexts_default_is_empty() {
+        let config = CodeGraphConfig::default();
+        assert!(config.contexts.is_empty());
+    }
+
+    #[test]
+    fn contexts_yaml_roundtrip() {
+        let yaml = r#"
+contexts:
+  "src/legacy": "Legacy v1 API, deprecated"
+  "src/services/auth": "Authentication service, security-critical"
+  "tests/": "Test files, not production code"
+"#;
+        let config: CodeGraphConfig = serde_yaml::from_str(yaml).unwrap();
+        pa_eq!(config.contexts.len(), 3);
+        pa_eq!(
+            config.contexts.get("src/legacy").map(|s| s.as_str()),
+            Some("Legacy v1 API, deprecated")
+        );
+        pa_eq!(
+            config.contexts.get("tests/").map(|s| s.as_str()),
+            Some("Test files, not production code")
+        );
+    }
+
+    #[test]
+    fn get_context_for_path_most_specific() {
+        let mut config = CodeGraphConfig::default();
+        config.contexts.insert("src".into(), "Source code".into());
+        config
+            .contexts
+            .insert("src/legacy".into(), "Legacy API".into());
+        config
+            .contexts
+            .insert("src/legacy/v1".into(), "V1 endpoints".into());
+
+        pa_eq!(
+            config.get_context_for_path("src/legacy/v1/handler.ts"),
+            Some("V1 endpoints")
+        );
+        pa_eq!(
+            config.get_context_for_path("src/legacy/utils.ts"),
+            Some("Legacy API")
+        );
+        pa_eq!(
+            config.get_context_for_path("src/services/auth.ts"),
+            Some("Source code")
+        );
+        pa_eq!(config.get_context_for_path("lib/external.ts"), None);
+    }
+
+    #[test]
+    fn get_context_for_path_no_contexts() {
+        let config = CodeGraphConfig::default();
+        pa_eq!(config.get_context_for_path("src/main.rs"), None);
+    }
+
+    #[test]
+    fn get_context_for_path_exact_prefix() {
+        let mut config = CodeGraphConfig::default();
+        config.contexts.insert("tests/".into(), "Tests".into());
+
+        pa_eq!(
+            config.get_context_for_path("tests/unit/foo.rs"),
+            Some("Tests")
+        );
+        // "tests_other" should NOT match "tests/" prefix
+        pa_eq!(config.get_context_for_path("tests_other/bar.rs"), None);
     }
 
     // --- ToolMetadata ---

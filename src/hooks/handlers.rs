@@ -622,7 +622,25 @@ pub fn handle_subagent_start() {
             overview.push('\n');
         }
 
-        overview.push_str("\nUse CodeGraph MCP tools (codegraph_query, codegraph_callers, etc.) for code navigation.\n");
+        overview.push_str(
+            "\n**CodeGraph Tools Available** (use instead of Grep/Glob for 10x faster results):\n\
+             \n\
+             **Tier 1 — Start Here:**\n\
+             - `codegraph_context` — Describe your task, get all relevant code in one call. Use FIRST.\n\
+             \n\
+             **Tier 2 — Drill Down:**\n\
+             - `codegraph_callers` / `codegraph_callees` — Trace call relationships (replaces grep for callers)\n\
+             - `codegraph_node` — Get full source code of a symbol (replaces reading whole files)\n\
+             - `codegraph_query` — Search symbols by name or semantic meaning (replaces Grep/Glob)\n\
+             - `codegraph_dependencies` — Module/file dependency tree (replaces reading imports)\n\
+             - `codegraph_find_references` — All usages of a symbol across the project\n\
+             \n\
+             **Anti-Patterns:**\n\
+             - Don't `grep -r \"functionName\"` — use `codegraph_callers(\"functionName\")`\n\
+             - Don't read entire files to find a function — use `codegraph_node(\"functionName\")`\n\
+             - Don't spawn Explore agents for code structure — use `codegraph_context(\"your task\")`\n\
+             - Don't manually trace imports — use `codegraph_dependencies(\"file.ts\")`\n",
+        );
 
         tracing::info!(
             "subagent_start: injecting {} chars of project context",

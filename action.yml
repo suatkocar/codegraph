@@ -1,0 +1,45 @@
+name: 'CodeGraph Security Scan'
+description: 'Scan code for security vulnerabilities using CodeGraph (OWASP Top 10, CWE Top 25, taint analysis)'
+author: 'Suat Kocar'
+
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  directory:
+    description: 'Directory to scan (relative to workspace root)'
+    required: false
+    default: '.'
+  severity:
+    description: 'Minimum severity to report (low, medium, high, critical)'
+    required: false
+    default: 'medium'
+  comment-on-pr:
+    description: 'Post findings as PR comment'
+    required: false
+    default: 'true'
+
+outputs:
+  total-findings:
+    description: 'Total number of security findings'
+  critical:
+    description: 'Number of critical findings'
+  high:
+    description: 'Number of high severity findings'
+  medium:
+    description: 'Number of medium severity findings'
+  low:
+    description: 'Number of low severity findings'
+  owasp-findings:
+    description: 'Number of OWASP Top 10 findings'
+  cwe-findings:
+    description: 'Number of CWE Top 25 findings'
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+  args:
+    - ${{ inputs.directory }}
+    - ${{ inputs.severity }}
+    - ${{ inputs.comment-on-pr }}

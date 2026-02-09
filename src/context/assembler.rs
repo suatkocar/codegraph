@@ -16,7 +16,7 @@
 //! | Extended   | ~20%   | Related tests and sibling functions         |
 //! | Background | ~15%   | Project structure overview                  |
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, Connection};
 
@@ -30,7 +30,17 @@ use crate::types::CodeNode;
 // ---------------------------------------------------------------------------
 
 /// Default token budget when the caller doesn't specify one.
-const DEFAULT_BUDGET: usize = 8_000;
+///
+/// Set to 32K tokens — modern LLMs have 128K-200K context windows, so a
+/// generous default ensures we don't leave relevant context on the floor.
+const DEFAULT_BUDGET: usize = 32_000;
+
+/// Initial tier allocation percentages. These define the *minimum guaranteed*
+/// share each tier gets, but unused budget is redistributed adaptively.
+const TIER_CORE_PCT: usize = 40;
+const TIER_NEAR_PCT: usize = 25;
+const TIER_EXTENDED_PCT: usize = 20;
+const TIER_BACKGROUND_PCT: usize = 15;
 
 // ---------------------------------------------------------------------------
 // Context assembler
@@ -44,27 +54,69 @@ const DEFAULT_BUDGET: usize = 8_000;
 pub struct ContextAssembler<'a> {
     conn: &'a Connection,
     search: &'a HybridSearch<'a>,
+    /// Directory context annotations from config (path prefix -> description).
+    contexts: HashMap<String, String>,
 }
 
 impl<'a> ContextAssembler<'a> {
     /// Create a new assembler backed by `conn` and `search`.
     pub fn new(conn: &'a Connection, search: &'a HybridSearch<'a>) -> Self {
-        Self { conn, search }
+        Self {
+            conn,
+            search,
+            contexts: HashMap::new(),
+        }
+    }
+
+    /// Create a new assembler with directory context annotations.
+    pub fn with_contexts(
+        conn: &'a Connection,
+        search: &'a HybridSearch<'a>,
+        contexts: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            conn,
+            search,
+            contexts,
+        }
+    }
+
+    /// Look up the most specific context annotation for a file path.
+    fn context_for_path(&self, path: &str) -> Option<&str> {
+        self.contexts
+            .iter()
+            .filter(|(prefix, _)| path.starts_with(prefix.as_str()))
+            .max_by_key(|(prefix, _)| prefix.len())
+            .map(|(_, desc)| desc.as_str())
     }
 
     /// Assemble a Markdown context document for `query`.
     ///
     /// `budget` defaults to [`DEFAULT_BUDGET`] tokens when `None`.
+    ///
+    /// ## Adaptive budget allocation
+    ///
+    /// Instead of rigidly splitting 40/25/20/15 and wasting unused space,
+    /// the assembler uses a two-pass approach:
+    ///
+    /// 1. **Pass 1:** Build all tier content with generous per-tier caps.
+    /// 2. **Pass 2:** Measure actual content sizes. If any tier is under
+    ///    its initial allocation, the surplus is redistributed
+    ///    proportionally to tiers that need more room, and those tiers
+    ///    are rebuilt with the enlarged budget.
     pub fn assemble_context(&self, query: &str, budget: Option<usize>) -> String {
         let budget = budget.unwrap_or(DEFAULT_BUDGET);
 
-        // Allocate across the four tiers.
-        let core_budget = budget * 40 / 100;
-        let near_budget = budget * 25 / 100;
-        let extended_budget = budget * 20 / 100;
-        let background_budget = budget * 15 / 100;
+        // Initial allocation.
+        let initial_budgets = [
+            budget * TIER_CORE_PCT / 100,
+            budget * TIER_NEAR_PCT / 100,
+            budget * TIER_EXTENDED_PCT / 100,
+            budget * TIER_BACKGROUND_PCT / 100,
+        ];
 
-        // -- 1. Core: top search results with full source -----------------
+        // -- Gather nodes for each tier (query-independent of budget) -----
+
         let search_opts = SearchOptions {
             limit: Some(10),
             ..Default::default()
@@ -81,9 +133,7 @@ impl<'a> ContextAssembler<'a> {
             }
         }
 
-        let core_section = self.build_core_section(&core_nodes, core_budget);
-
-        // -- 2. Near: signatures of direct callers/callees ----------------
+        // Near: direct callers/callees.
         let mut near_ids: Vec<String> = Vec::new();
         for node in &core_nodes {
             let neighbor_ids = self.get_neighbor_ids(&node.id);
@@ -102,52 +152,64 @@ impl<'a> ContextAssembler<'a> {
             }
         }
 
-        let near_section = self.build_near_section(&near_nodes, near_budget);
-
-        // -- 3. Extended: related tests and siblings ----------------------
+        // Extended: tests + siblings.
         let mut extended_nodes: Vec<CodeNode> = Vec::new();
-
-        // 3a. Tests: nodes whose name contains "test" or "spec" and that
-        //     reference one of the core symbols.
         let test_nodes = self.find_related_tests(&core_nodes, &seen_ids);
         for node in &test_nodes {
             seen_ids.insert(node.id.clone());
         }
         extended_nodes.extend(test_nodes);
 
-        // 3b. Siblings: other nodes in the same file as core nodes.
         let sibling_nodes = self.find_siblings(&core_nodes, &seen_ids);
         for node in &sibling_nodes {
             seen_ids.insert(node.id.clone());
         }
         extended_nodes.extend(sibling_nodes);
 
-        let extended_section = self.build_extended_section(&extended_nodes, extended_budget);
+        // -- Pass 1: build with initial budgets --------------------------
 
-        // -- 4. Background: project structure overview --------------------
-        let background_section = self.build_background_section(background_budget);
+        let sections_pass1 = [
+            self.build_core_section(&core_nodes, initial_budgets[0]),
+            self.build_near_section(&near_nodes, initial_budgets[1]),
+            self.build_extended_section(&extended_nodes, initial_budgets[2]),
+            self.build_background_section(initial_budgets[3]),
+        ];
+
+        let actual_tokens: Vec<usize> = sections_pass1.iter().map(|s| estimate_tokens(s)).collect();
+
+        // -- Pass 2: redistribute surplus --------------------------------
+
+        let final_sections = redistribute_and_rebuild(
+            &initial_budgets,
+            &actual_tokens,
+            budget,
+            || self.build_core_section(&core_nodes, budget), // rebuild with max
+            || self.build_near_section(&near_nodes, budget),
+            || self.build_extended_section(&extended_nodes, budget),
+            || self.build_background_section(budget),
+            sections_pass1,
+        );
 
         // -- Assemble the final document ----------------------------------
-        let mut sections: Vec<String> = Vec::new();
+        let labels = [
+            "## Core Context",
+            "## Related Symbols",
+            "## Tests & Siblings",
+            "## Project Structure",
+        ];
+        let mut output: Vec<String> = Vec::new();
 
-        if !core_section.is_empty() {
-            sections.push(format!("## Core Context\n\n{}", core_section));
-        }
-        if !near_section.is_empty() {
-            sections.push(format!("## Related Symbols\n\n{}", near_section));
-        }
-        if !extended_section.is_empty() {
-            sections.push(format!("## Tests & Siblings\n\n{}", extended_section));
-        }
-        if !background_section.is_empty() {
-            sections.push(format!("## Project Structure\n\n{}", background_section));
+        for (section, label) in final_sections.iter().zip(labels.iter()) {
+            if !section.is_empty() {
+                output.push(format!("{}\n\n{}", label, section));
+            }
         }
 
-        if sections.is_empty() {
+        if output.is_empty() {
             return String::from("No relevant context found.");
         }
 
-        sections.join("\n\n---\n\n")
+        output.join("\n\n---\n\n")
     }
 
     // -------------------------------------------------------------------
@@ -160,7 +222,8 @@ impl<'a> ContextAssembler<'a> {
         let mut used = 0;
 
         for node in nodes {
-            let formatted = format_node_full(node);
+            let ctx_annotation = self.context_for_path(&node.file_path);
+            let formatted = format_node_full(node, ctx_annotation);
             let tokens = estimate_tokens(&formatted);
             if used + tokens > budget && !parts.is_empty() {
                 break;
@@ -394,6 +457,122 @@ impl<'a> ContextAssembler<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// Adaptive budget redistribution
+// ---------------------------------------------------------------------------
+
+/// Redistribute unused budget from under-filled tiers to over-filled tiers.
+///
+/// A tier is "under-filled" if its actual content uses fewer tokens than its
+/// initial allocation. The surplus from all under-filled tiers is pooled and
+/// distributed proportionally among tiers that could use more.
+///
+/// If redistribution would give a tier a meaningfully larger budget (>10%
+/// increase), that tier is rebuilt with the expanded budget. Otherwise, the
+/// pass-1 result is kept to avoid unnecessary work.
+#[allow(clippy::too_many_arguments)]
+fn redistribute_and_rebuild<F0, F1, F2, F3>(
+    initial_budgets: &[usize; 4],
+    actual_tokens: &[usize],
+    total_budget: usize,
+    rebuild_core: F0,
+    rebuild_near: F1,
+    rebuild_extended: F2,
+    rebuild_background: F3,
+    pass1: [String; 4],
+) -> [String; 4]
+where
+    F0: FnOnce() -> String,
+    F1: FnOnce() -> String,
+    F2: FnOnce() -> String,
+    F3: FnOnce() -> String,
+{
+    // Calculate surplus from under-filled tiers.
+    let mut surplus: usize = 0;
+    let mut needs_more = [false; 4]; // tiers that used their full allocation
+    let mut demand = [0usize; 4]; // how much each tier wanted beyond its allocation
+
+    for i in 0..4 {
+        if actual_tokens[i] < initial_budgets[i] {
+            // Under-filled: this tier didn't use its full share.
+            surplus += initial_budgets[i] - actual_tokens[i];
+        } else {
+            // At or over budget: could benefit from more.
+            needs_more[i] = true;
+            demand[i] = initial_budgets[i]; // use initial allocation as weight
+        }
+    }
+
+    if surplus == 0 {
+        // Nothing to redistribute — every tier used its full allocation.
+        return pass1;
+    }
+
+    let total_demand: usize = demand.iter().sum();
+    if total_demand == 0 {
+        // No tier needs more — all under-filled. Keep pass-1 results.
+        return pass1;
+    }
+
+    // Compute final budgets: initial + proportional share of surplus.
+    let mut final_budgets = *initial_budgets;
+    for i in 0..4 {
+        if needs_more[i] {
+            let share = surplus * demand[i] / total_demand;
+            final_budgets[i] += share;
+        } else {
+            // Shrink to actual usage (don't over-allocate).
+            final_budgets[i] = actual_tokens[i];
+        }
+    }
+
+    // Cap to total budget.
+    let sum: usize = final_budgets.iter().sum();
+    if sum > total_budget {
+        // Scale down proportionally.
+        for b in &mut final_budgets {
+            *b = *b * total_budget / sum;
+        }
+    }
+
+    // Rebuild only tiers whose budget increased meaningfully (>10%).
+    let threshold = |initial: usize, final_b: usize| -> bool {
+        final_b > initial && (final_b - initial) * 10 > initial
+    };
+
+    let [s0, s1, s2, s3] = pass1;
+
+    let s0 = if threshold(initial_budgets[0], final_budgets[0]) {
+        let rebuilt = rebuild_core();
+        truncate_to_fit(&rebuilt, final_budgets[0])
+    } else {
+        s0
+    };
+
+    let s1 = if threshold(initial_budgets[1], final_budgets[1]) {
+        let rebuilt = rebuild_near();
+        truncate_to_fit(&rebuilt, final_budgets[1])
+    } else {
+        s1
+    };
+
+    let s2 = if threshold(initial_budgets[2], final_budgets[2]) {
+        let rebuilt = rebuild_extended();
+        truncate_to_fit(&rebuilt, final_budgets[2])
+    } else {
+        s2
+    };
+
+    let s3 = if threshold(initial_budgets[3], final_budgets[3]) {
+        let rebuilt = rebuild_background();
+        truncate_to_fit(&rebuilt, final_budgets[3])
+    } else {
+        s3
+    };
+
+    [s0, s1, s2, s3]
+}
+
+// ---------------------------------------------------------------------------
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
@@ -408,7 +587,7 @@ impl<'a> ContextAssembler<'a> {
 /// }
 /// ```
 /// ```
-fn format_node_full(node: &CodeNode) -> String {
+fn format_node_full(node: &CodeNode, context_annotation: Option<&str>) -> String {
     let tag = language_tag(node.language.as_str());
     let location = format!("{}:{}-{}", node.file_path, node.start_line, node.end_line);
     let header = format!(
@@ -427,7 +606,15 @@ fn format_node_full(node: &CodeNode) -> String {
         .map(|d| format!("\n> {}\n", d.lines().next().unwrap_or("")))
         .unwrap_or_default();
 
-    format!("{}{}\n\n```{}\n{}\n```", header, doc_line, tag, body)
+    // Include directory context annotation if present.
+    let ctx_line = context_annotation
+        .map(|ctx| format!("\n> **Context:** {}\n", ctx))
+        .unwrap_or_default();
+
+    format!(
+        "{}{}{}\n\n```{}\n{}\n```",
+        header, doc_line, ctx_line, tag, body
+    )
 }
 
 /// Format a node as a compact one-line signature.
@@ -532,7 +719,7 @@ mod tests {
             Some("Say hello to someone."),
         );
 
-        let formatted = format_node_full(&node);
+        let formatted = format_node_full(&node, None);
         assert!(formatted.contains("### `function` **greet**"));
         assert!(formatted.contains("```ts"));
         assert!(formatted.contains("function greet(name: string)"));
@@ -551,7 +738,7 @@ mod tests {
             None,
         );
 
-        let formatted = format_node_full(&node);
+        let formatted = format_node_full(&node, None);
         assert!(formatted.contains("// source not available"));
     }
 
@@ -848,7 +1035,7 @@ mod tests {
             None,
         );
         node.language = Language::Python;
-        let formatted = format_node_full(&node);
+        let formatted = format_node_full(&node, None);
         assert!(formatted.contains("```py"));
     }
 
@@ -864,7 +1051,7 @@ mod tests {
             None,
         );
         node.language = Language::Rust;
-        let formatted = format_node_full(&node);
+        let formatted = format_node_full(&node, None);
         assert!(formatted.contains("```rust"));
     }
 
@@ -879,7 +1066,7 @@ mod tests {
             Some("function helper() {}"),
             None,
         );
-        let formatted = format_node_full(&node);
+        let formatted = format_node_full(&node, None);
         assert!(formatted.contains("src/util.ts:42-47"));
     }
 
@@ -894,7 +1081,7 @@ mod tests {
             Some("class Foo {\n  bar() {}\n}"),
             None,
         );
-        let formatted = format_node_full(&node);
+        let formatted = format_node_full(&node, None);
         assert!(formatted.contains("`class`"));
     }
 
@@ -1173,5 +1360,142 @@ mod tests {
         let assembler = ContextAssembler::new(&store.conn, &search);
         let files = assembler.get_distinct_files();
         assert!(files.is_empty());
+    }
+
+    // -- Default budget ---------------------------------------------------
+
+    #[test]
+    fn default_budget_is_32k() {
+        assert_eq!(DEFAULT_BUDGET, 32_000);
+    }
+
+    // -- Tier constants ---------------------------------------------------
+
+    #[test]
+    fn tier_percentages_sum_to_100() {
+        assert_eq!(
+            TIER_CORE_PCT + TIER_NEAR_PCT + TIER_EXTENDED_PCT + TIER_BACKGROUND_PCT,
+            100
+        );
+    }
+
+    // -- Adaptive redistribution ------------------------------------------
+
+    #[test]
+    fn redistribute_no_surplus_returns_pass1() {
+        let initial = [400, 250, 200, 150];
+        let actual = [400, 250, 200, 150];
+
+        let pass1 = [
+            "core".to_string(),
+            "near".to_string(),
+            "extended".to_string(),
+            "background".to_string(),
+        ];
+
+        let result = redistribute_and_rebuild(
+            &initial,
+            &actual,
+            1000,
+            || "rebuilt_core".into(),
+            || "rebuilt_near".into(),
+            || "rebuilt_extended".into(),
+            || "rebuilt_background".into(),
+            pass1,
+        );
+
+        assert_eq!(result[0], "core", "no change when no surplus");
+        assert_eq!(result[1], "near");
+        assert_eq!(result[2], "extended");
+        assert_eq!(result[3], "background");
+    }
+
+    #[test]
+    fn redistribute_all_under_returns_pass1() {
+        let initial = [400, 250, 200, 150];
+        let actual = [100, 50, 30, 20];
+
+        let pass1 = [
+            "core".to_string(),
+            "near".to_string(),
+            "ext".to_string(),
+            "bg".to_string(),
+        ];
+
+        let result = redistribute_and_rebuild(
+            &initial,
+            &actual,
+            1000,
+            || "rebuilt_core".into(),
+            || "rebuilt_near".into(),
+            || "rebuilt_ext".into(),
+            || "rebuilt_bg".into(),
+            pass1,
+        );
+
+        assert_eq!(result[0], "core");
+    }
+
+    #[test]
+    fn redistribute_surplus_flows_to_needy_tiers() {
+        let initial = [400, 250, 200, 150];
+        let actual = [100, 250, 200, 150];
+
+        let pass1 = [
+            "core".to_string(),
+            "near".to_string(),
+            "extended".to_string(),
+            "background".to_string(),
+        ];
+
+        let result = redistribute_and_rebuild(
+            &initial,
+            &actual,
+            1000,
+            || "rebuilt_core".into(),
+            || "rebuilt_near".into(),
+            || "rebuilt_extended".into(),
+            || "rebuilt_background".into(),
+            pass1,
+        );
+
+        assert_eq!(result[0], "core", "under-filled core not rebuilt");
+        let any_rebuilt = result[1] == "rebuilt_near"
+            || result[2] == "rebuilt_extended"
+            || result[3] == "rebuilt_background";
+        assert!(any_rebuilt, "at least one needy tier should be rebuilt");
+    }
+
+    #[test]
+    fn assemble_context_default_budget_produces_more_context() {
+        let store = setup();
+
+        for i in 0..30 {
+            store
+                .upsert_node(&make_node(
+                    &format!("fn:a.ts:func{}:{}", i, i),
+                    &format!("func{}", i),
+                    "a.ts",
+                    NodeKind::Function,
+                    i,
+                    Some(&format!(
+                        "function func{}() {{\n  // line 1\n  // line 2\n  // line 3\n  // line 4\n}}",
+                        i
+                    )),
+                    None,
+                ))
+                .unwrap();
+        }
+
+        let search = HybridSearch::new(&store.conn);
+        let assembler = ContextAssembler::new(&store.conn, &search);
+
+        let ctx_8k = assembler.assemble_context("func", Some(8_000));
+        let ctx_32k = assembler.assemble_context("func", None);
+
+        assert!(
+            estimate_tokens(&ctx_32k) >= estimate_tokens(&ctx_8k),
+            "32K budget should produce >= context than 8K"
+        );
     }
 }

@@ -6,6 +6,7 @@
 //! `post-commit` hook already exists, the codegraph line is appended.
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
@@ -62,6 +63,7 @@ pub fn install_git_post_commit_hook(project_dir: &str) -> Result<()> {
         fs::write(&hook_path, script)?;
     }
 
+    #[cfg(unix)]
     fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))?;
     tracing::info!("Installed post-commit hook at {}", hook_path.display());
     Ok(())
@@ -155,9 +157,12 @@ mod tests {
         assert!(content.contains("codegraph index"));
         assert!(content.contains("2>/dev/null &"));
 
-        // Check executable permission.
-        let mode = fs::metadata(&hook).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o755);
+        // Check executable permission (Unix only).
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(&hook).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
     }
 
     #[test]

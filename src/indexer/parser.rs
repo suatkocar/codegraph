@@ -1284,7 +1284,7 @@ in {
     #[test]
     fn load_query_has_expected_capture_names() {
         let query = CodeParser::load_query(Language::TypeScript).unwrap();
-        let names: Vec<&str> = query.capture_names().iter().copied().collect();
+        let names: Vec<&str> = query.capture_names().to_vec();
 
         // Core captures that our extractor will rely on
         assert!(names.contains(&"name"), "missing @name capture");
@@ -1314,15 +1314,15 @@ in {
             let ts_lang = CodeParser::get_ts_language(lang);
             // A valid language must have a version within the supported range
             assert!(
-                ts_lang.version() >= tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION,
+                ts_lang.abi_version() >= tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION,
                 "{lang} grammar version {} is below minimum {}",
-                ts_lang.version(),
+                ts_lang.abi_version(),
                 tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION
             );
             assert!(
-                ts_lang.version() <= tree_sitter::LANGUAGE_VERSION,
+                ts_lang.abi_version() <= tree_sitter::LANGUAGE_VERSION,
                 "{lang} grammar version {} exceeds maximum {}",
-                ts_lang.version(),
+                ts_lang.abi_version(),
                 tree_sitter::LANGUAGE_VERSION
             );
         }
@@ -1567,7 +1567,7 @@ in {
 
     #[test]
     fn code_parser_default_works() {
-        let parser = CodeParser::default();
+        let parser = CodeParser;
         let tree = parser.parse("fn main() {}", Language::Rust);
         assert!(tree.is_ok());
     }
@@ -1579,7 +1579,7 @@ in {
     #[test]
     fn typescript_query_captures_function_class_method() {
         let query = CodeParser::load_query(Language::TypeScript).unwrap();
-        let names: Vec<&str> = query.capture_names().iter().copied().collect();
+        let names: Vec<&str> = query.capture_names().to_vec();
         assert!(names.contains(&"name"), "TS missing @name");
         assert!(
             names.contains(&"definition.function"),
@@ -1598,7 +1598,7 @@ in {
     #[test]
     fn python_query_captures_function_class() {
         let query = CodeParser::load_query(Language::Python).unwrap();
-        let names: Vec<&str> = query.capture_names().iter().copied().collect();
+        let names: Vec<&str> = query.capture_names().to_vec();
         assert!(names.contains(&"name"), "Python missing @name");
         assert!(
             names.contains(&"definition.function"),
@@ -1613,7 +1613,7 @@ in {
     #[test]
     fn rust_query_captures_function_struct_trait() {
         let query = CodeParser::load_query(Language::Rust).unwrap();
-        let names: Vec<&str> = query.capture_names().iter().copied().collect();
+        let names: Vec<&str> = query.capture_names().to_vec();
         assert!(names.contains(&"name"), "Rust missing @name");
         assert!(
             names.contains(&"definition.function"),
@@ -1624,7 +1624,7 @@ in {
     #[test]
     fn go_query_captures_function() {
         let query = CodeParser::load_query(Language::Go).unwrap();
-        let names: Vec<&str> = query.capture_names().iter().copied().collect();
+        let names: Vec<&str> = query.capture_names().to_vec();
         assert!(names.contains(&"name"), "Go missing @name");
         assert!(
             names.contains(&"definition.function"),
@@ -1635,7 +1635,7 @@ in {
     #[test]
     fn java_query_captures_class_method() {
         let query = CodeParser::load_query(Language::Java).unwrap();
-        let names: Vec<&str> = query.capture_names().iter().copied().collect();
+        let names: Vec<&str> = query.capture_names().to_vec();
         assert!(names.contains(&"name"), "Java missing @name");
         assert!(
             names.contains(&"definition.class"),

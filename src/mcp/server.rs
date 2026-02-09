@@ -1,28 +1,28 @@
 //! MCP server implementation using rmcp over stdio transport.
 //!
-//! Provides 45+ CodeGraph tools that Claude (or any MCP client) can invoke
+//! Provides 46 CodeGraph tools that Claude (or any MCP client) can invoke
 //! to search, navigate, analyze, secure, and visualize a codebase.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use rmcp::model::{ServerCapabilities, ServerInfo};
-use rmcp::{tool, ServerHandler, ServiceExt};
-use serde::Serialize;
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::{
+    Annotated, CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult,
+    ListPromptsResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt,
+    PromptArgument, PromptMessage, PromptMessageRole, RawResource, ReadResourceRequestParams,
+    ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo,
+};
+use rmcp::service::{RequestContext, RoleServer};
+use rmcp::{tool, tool_router, ErrorData as McpError, ServerHandler, ServiceExt};
+use serde::{Deserialize, Serialize};
 
-use crate::context::assembler::ContextAssembler;
-use crate::git;
-use crate::graph::complexity;
-use crate::graph::dataflow;
+use crate::config::schema::CodeGraphConfig;
 use crate::graph::ranking::GraphRanking;
-use crate::graph::search::{HybridSearch, SearchOptions};
 use crate::graph::store::GraphStore;
-use crate::graph::traversal::GraphTraversal;
-use crate::resolution::dead_code::find_dead_code;
-use crate::resolution::frameworks::detect_frameworks;
-use crate::security;
-use crate::types::{CodeNode, NodeKind};
+use crate::graph::traversal::NodeWithDepth;
+use crate::types::CodeNode;
 
 // ---------------------------------------------------------------------------
 // Server struct
@@ -33,10 +33,27 @@ use crate::types::{CodeNode, NodeKind};
 /// Wraps a `GraphStore` in `Arc<Mutex<>>` to satisfy the `Clone + Send + Sync`
 /// requirements of rmcp's `ServerHandler` trait while keeping all graph
 /// operations synchronous internally.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CodeGraphServer {
     store: Arc<Mutex<GraphStore>>,
     project_root: PathBuf,
+    config: CodeGraphConfig,
+    #[cfg(feature = "reranking")]
+    reranker: Option<Arc<crate::graph::reranker::Reranker>>,
+}
+
+impl std::fmt::Debug for CodeGraphServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("CodeGraphServer");
+        s.field("project_root", &self.project_root)
+            .field("config", &self.config);
+        #[cfg(feature = "reranking")]
+        s.field(
+            "reranker",
+            &self.reranker.as_ref().map(|_| "Reranker(loaded)"),
+        );
+        s.finish()
+    }
 }
 
 impl CodeGraphServer {
@@ -45,6 +62,11 @@ impl CodeGraphServer {
         Self {
             store: Arc::new(Mutex::new(store)),
             project_root: PathBuf::from("."),
+            config: CodeGraphConfig::default(),
+            #[cfg(feature = "reranking")]
+            reranker: crate::graph::reranker::Reranker::try_new()
+                .ok()
+                .map(Arc::new),
         }
     }
 
@@ -53,38 +75,114 @@ impl CodeGraphServer {
         Self {
             store: Arc::new(Mutex::new(store)),
             project_root,
+            config: CodeGraphConfig::default(),
+            #[cfg(feature = "reranking")]
+            reranker: crate::graph::reranker::Reranker::try_new()
+                .ok()
+                .map(Arc::new),
         }
     }
 
-    /// Resolve a symbol reference to a CodeNode.
-    /// Accepts either a full node ID or a symbol name (returns the first match).
-    fn resolve_symbol(&self, symbol_ref: &str) -> Option<CodeNode> {
-        let store = self.store.lock().unwrap();
-        if let Ok(Some(node)) = store.get_node(symbol_ref) {
-            return Some(node);
+    /// Create a new MCP server with an explicit project root and config.
+    pub fn with_config(store: GraphStore, project_root: PathBuf, config: CodeGraphConfig) -> Self {
+        Self {
+            store: Arc::new(Mutex::new(store)),
+            project_root,
+            config,
+            #[cfg(feature = "reranking")]
+            reranker: crate::graph::reranker::Reranker::try_new()
+                .ok()
+                .map(Arc::new),
         }
-        if let Ok(nodes) = store.get_nodes_by_name(symbol_ref) {
-            if !nodes.is_empty() {
-                return Some(nodes.into_iter().next().unwrap());
-            }
-        }
-        None
     }
+}
+
+/// Resolve a symbol reference to a CodeNode from a store.
+/// Accepts either a full node ID or a symbol name (returns the first match).
+pub(crate) fn resolve_symbol(store: &Arc<Mutex<GraphStore>>, symbol_ref: &str) -> Option<CodeNode> {
+    let store = store.lock().unwrap_or_else(|e| e.into_inner());
+    if let Ok(Some(node)) = store.get_node(symbol_ref) {
+        return Some(node);
+    }
+    if let Ok(nodes) = store.get_nodes_by_name(symbol_ref) {
+        if !nodes.is_empty() {
+            return Some(nodes.into_iter().next().unwrap());
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
 // Helper: serialize to JSON text
 // ---------------------------------------------------------------------------
 
-fn json_text<T: Serialize>(data: &T) -> String {
+pub(crate) fn json_text<T: Serialize>(data: &T) -> String {
     serde_json::to_string_pretty(data).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+}
+
+// ---------------------------------------------------------------------------
+// Progressive disclosure: detail_level support
+// ---------------------------------------------------------------------------
+
+/// Controls how much detail MCP tool responses include.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DetailLevel {
+    /// Names, kinds only — minimal output for token efficiency.
+    Summary,
+    /// Default — names, kinds, file paths, lines.
+    Standard,
+    /// Everything including source bodies and documentation.
+    Full,
+}
+
+/// Parse a user-provided detail_level string into a [`DetailLevel`].
+/// Defaults to `Standard` for `None` or unrecognised values.
+pub(crate) fn parse_detail_level(s: Option<&str>) -> DetailLevel {
+    match s.map(|v| v.to_lowercase()).as_deref() {
+        Some("summary") => DetailLevel::Summary,
+        Some("full") => DetailLevel::Full,
+        _ => DetailLevel::Standard,
+    }
+}
+
+/// Format a [`NodeWithDepth`] from traversal results according to detail level.
+pub(crate) fn format_traversal_node(nwd: &NodeWithDepth, level: DetailLevel) -> serde_json::Value {
+    let c = &nwd.node;
+    match level {
+        DetailLevel::Summary => serde_json::json!({
+            "name": c.name, "kind": c.kind.as_str(),
+            "filePath": c.file_path, "depth": nwd.depth,
+        }),
+        DetailLevel::Standard => serde_json::json!({
+            "id": c.id, "name": c.name, "kind": c.kind.as_str(),
+            "filePath": c.file_path, "startLine": c.start_line, "depth": nwd.depth,
+        }),
+        DetailLevel::Full => {
+            let mut v = serde_json::json!({
+                "id": c.id, "name": c.name, "kind": c.kind.as_str(),
+                "filePath": c.file_path, "startLine": c.start_line,
+                "endLine": c.end_line, "depth": nwd.depth,
+                "language": c.language.as_str(),
+            });
+            if let Some(ref body) = c.body {
+                v["body"] = serde_json::json!(body);
+            }
+            if let Some(ref doc) = c.documentation {
+                v["documentation"] = serde_json::json!(doc);
+            }
+            if let Some(ref qn) = c.qualified_name {
+                v["qualifiedName"] = serde_json::json!(qn);
+            }
+            v
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Mermaid diagram helpers
 // ---------------------------------------------------------------------------
 
-fn mermaid_safe(text: &str) -> String {
+pub(crate) fn mermaid_safe(text: &str) -> String {
     text.chars()
         .map(|c| match c {
             '[' | ']' | '(' | ')' | '{' | '}' | '|' | '<' | '>' | '#' | '&' | '"' => '_',
@@ -93,7 +191,7 @@ fn mermaid_safe(text: &str) -> String {
         .collect()
 }
 
-fn mermaid_id(node_id: &str) -> String {
+pub(crate) fn mermaid_id(node_id: &str) -> String {
     let mut hash: i32 = 0;
     for ch in node_id.chars() {
         hash = ((hash << 5).wrapping_sub(hash)).wrapping_add(ch as i32);
@@ -101,7 +199,7 @@ fn mermaid_id(node_id: &str) -> String {
     format!("n{:x}", hash.unsigned_abs())
 }
 
-fn generate_graph_diagram(
+pub(crate) fn generate_graph_diagram(
     center: &CodeNode,
     nodes: &[CodeNode],
     edges: &[crate::types::CodeEdge],
@@ -154,115 +252,306 @@ fn generate_graph_diagram(
 }
 
 // ---------------------------------------------------------------------------
+// Tool parameter structs (rmcp 0.14 uses Parameters<T> instead of #[tool(param)])
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct QueryParams {
+    #[schemars(description = "Natural language or keyword search query")]
+    pub query: String,
+    #[schemars(description = "Maximum results to return (default 20)")]
+    pub limit: Option<usize>,
+    #[schemars(description = "Filter by language (e.g. 'typescript', 'python')")]
+    pub language: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct SearchParams {
+    #[schemars(description = "Keyword query — symbol name, function name, or exact term")]
+    pub query: String,
+    #[schemars(description = "Maximum results to return (default 10)")]
+    pub limit: Option<usize>,
+    #[schemars(description = "Filter by node kind (e.g. 'function', 'class', 'method')")]
+    pub kind: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct SymbolDepthParams {
+    #[schemars(description = "Symbol name or node ID")]
+    pub symbol: String,
+    #[schemars(description = "Maximum traversal depth (default 5, max 50)")]
+    pub max_depth: Option<u32>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct SymbolDepthDetailParams {
+    #[schemars(description = "Symbol name or node ID")]
+    pub symbol: String,
+    #[schemars(description = "Maximum traversal depth (default 5, max 50)")]
+    pub max_depth: Option<u32>,
+    #[schemars(
+        description = "Detail level: 'summary' (names only), 'standard' (default), or 'full' (includes signatures and source)"
+    )]
+    pub detail_level: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct ImpactParams {
+    #[schemars(description = "File path to analyze impact for (analyzes all symbols in the file)")]
+    pub file_path: Option<String>,
+    #[schemars(description = "Symbol name or node ID to analyze impact for")]
+    pub symbol: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct StructureParams {
+    #[schemars(
+        description = "Scope to a specific directory or file path (default: entire project)"
+    )]
+    pub path: Option<String>,
+    #[schemars(description = "Number of top symbols to return per category (default 10)")]
+    pub depth: Option<usize>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct SymbolParams {
+    #[schemars(description = "Symbol name or node ID")]
+    pub symbol: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct ContextParams {
+    #[schemars(description = "Natural language question or topic to gather context for")]
+    pub query: String,
+    #[schemars(description = "Token budget for the context document (default 8000, max 100000)")]
+    pub budget: Option<usize>,
+    #[schemars(
+        description = "Detail level: 'summary' (names+signatures, ~50% budget), 'standard' (default), or 'full' (2x budget, all source)"
+    )]
+    pub detail_level: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct DiagramParams {
+    #[schemars(description = "Symbol name or node ID to center the diagram on")]
+    pub symbol: Option<String>,
+    #[schemars(description = "Diagram type: 'dependency' (default), 'call', or 'module'")]
+    pub diagram_type: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct NodeParams {
+    #[schemars(description = "Symbol name or node ID to look up")]
+    pub symbol: String,
+    #[schemars(
+        description = "Include relationships (callers, callees, dependencies) in the response (default false)"
+    )]
+    pub include_relations: Option<bool>,
+    #[schemars(
+        description = "Detail level: 'summary' (name+kind+file+signature only), 'standard' (default), or 'full' (includes body + all relationships)"
+    )]
+    pub detail_level: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct DeadCodeParams {
+    #[schemars(
+        description = "Filter by symbol kinds (comma-separated, e.g. 'function,class'). If omitted, all kinds are checked."
+    )]
+    pub kinds: Option<String>,
+    #[schemars(description = "Include exported symbols in results (default false)")]
+    pub include_exported: Option<bool>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct OptionalDirParams {
+    #[schemars(description = "Directory path (defaults to project root)")]
+    pub directory: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct FilePathParams {
+    #[schemars(description = "File path")]
+    pub file_path: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct FileHistoryParams {
+    #[schemars(description = "File path to get history for")]
+    pub file_path: String,
+    #[schemars(description = "Maximum commits to return (default 20)")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct LimitParams {
+    #[schemars(description = "Maximum items to return (default 20)")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct CommitParams {
+    #[schemars(description = "Commit hash")]
+    pub commit: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct OptionalFilePathParams {
+    #[schemars(description = "Optional file path to scope to")]
+    pub file_path: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct ScanSecurityParams {
+    #[schemars(description = "Directory to scan (defaults to project root)")]
+    pub directory: Option<String>,
+    #[schemars(description = "Exclude test files from scan (default true)")]
+    pub exclude_tests: Option<bool>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct CweIdParams {
+    #[schemars(description = "CWE identifier (e.g. 'CWE-89')")]
+    pub cwe_id: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct SuggestFixParams {
+    #[schemars(description = "Rule ID of the finding (e.g. 'sql-injection-string-format')")]
+    pub rule_id: String,
+    #[schemars(description = "The matched vulnerable code snippet")]
+    pub matched_code: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct SourceLangParams {
+    #[schemars(description = "Source code to analyze")]
+    pub source: String,
+    #[schemars(description = "Programming language (e.g. 'python', 'javascript')")]
+    pub language: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct TraceTaintParams {
+    #[schemars(description = "Source code to analyze")]
+    pub source: String,
+    #[schemars(description = "Programming language")]
+    pub language: String,
+    #[schemars(description = "Line number to trace from")]
+    pub from_line: usize,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct MaxDepthParams {
+    #[schemars(description = "Maximum directory depth (default 3)")]
+    pub max_depth: Option<usize>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct OptionalScopeParams {
+    #[schemars(description = "Optional directory to scope to")]
+    pub scope: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct FindPathParams {
+    #[schemars(description = "Source symbol name or node ID")]
+    pub from: String,
+    #[schemars(description = "Target symbol name or node ID")]
+    pub to: String,
+    #[schemars(description = "Maximum path depth (default 10)")]
+    pub max_depth: Option<u32>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct ComplexityParams {
+    #[schemars(description = "Minimum cyclomatic complexity to include in results (default 5)")]
+    pub min_complexity: Option<u32>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct DataFlowParams {
+    #[schemars(description = "Path to source file (reads file and auto-detects language)")]
+    pub file_path: Option<String>,
+    #[schemars(description = "Source code to analyze (used when file_path is not provided)")]
+    pub source: Option<String>,
+    #[schemars(description = "Programming language (used when file_path is not provided)")]
+    pub language: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct ReachingDefsParams {
+    #[schemars(description = "Path to source file (reads file and auto-detects language)")]
+    pub file_path: Option<String>,
+    #[schemars(description = "Source code to analyze (used when file_path is not provided)")]
+    pub source: Option<String>,
+    #[schemars(description = "Programming language (used when file_path is not provided)")]
+    pub language: Option<String>,
+    #[schemars(description = "Target line number")]
+    pub target_line: u32,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct FrameworksParams {
+    #[schemars(
+        description = "Project directory to scan for manifests (defaults to the indexed project root)"
+    )]
+    pub project_dir: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct DeepQueryParams {
+    #[schemars(
+        description = "Natural language or keyword search query — re-ranked by a cross-encoder for maximum relevance"
+    )]
+    pub query: String,
+    #[schemars(description = "Maximum results to return after re-ranking (default 10)")]
+    pub limit: Option<usize>,
+}
+
+// ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------
 
-#[tool(tool_box)]
+#[tool_router]
 impl CodeGraphServer {
     // 1. codegraph_query — Hybrid keyword + semantic search
     #[tool(
         name = "codegraph_query",
-        description = "Search the code graph using hybrid keyword + semantic search. Returns ranked code snippets with file paths and relevance scores. Use instead of Grep/Glob when searching for code symbols or concepts."
+        description = "Hybrid semantic + keyword search with query expansion. Best for conceptual queries and natural language. For exact symbol name lookups, use codegraph_search instead (10x faster). Use instead of Grep/Glob when searching for code symbols or concepts."
     )]
-    async fn codegraph_query(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Natural language or keyword search query")]
-        query: String,
-        #[tool(param)]
-        #[schemars(description = "Maximum results to return (default 20)")]
-        limit: Option<usize>,
-        #[tool(param)]
-        #[schemars(description = "Filter by language (e.g. 'typescript', 'python')")]
-        language: Option<String>,
-    ) -> String {
-        let store = self.store.lock().unwrap();
-        let search = HybridSearch::new(&store.conn);
-        let opts = SearchOptions {
-            limit: Some(limit.unwrap_or(20)),
-            language,
-            ..Default::default()
-        };
-        match search.search(&query, &opts) {
-            Ok(results) => json_text(&results),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+    async fn codegraph_query(&self, Parameters(p): Parameters<QueryParams>) -> String {
+        super::tools_core::handle_query(&self.store, &p.query, p.limit, p.language, &self.config)
+    }
+
+    // 1b. codegraph_search — Fast keyword-only search (FTS5, no embeddings)
+    #[tool(
+        name = "codegraph_search",
+        description = "Fast keyword search for exact symbol name lookups (<10ms). FTS5-only, no embeddings, no RRF fusion. Use this when you know the symbol name. For semantic/conceptual search, use codegraph_query instead."
+    )]
+    async fn codegraph_search(&self, Parameters(p): Parameters<SearchParams>) -> String {
+        super::tools_core::handle_search(&self.store, &p.query, p.limit, p.kind, &self.config)
     }
 
     // 2. codegraph_dependencies — Forward dependency traversal
     #[tool(
         name = "codegraph_dependencies",
-        description = "Find all dependencies of a symbol (what it calls, imports, references, extends, or implements). Returns a dependency tree with depth levels. Use instead of Explore agents to trace imports and dependencies."
+        description = "Find all dependencies of a file or module (imports, type references, etc.). Returns a dependency tree with depth levels. Use instead of Explore agents to trace imports and dependencies. For call-only relationships from a specific function, use codegraph_callees."
     )]
-    async fn codegraph_dependencies(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Symbol name or node ID to find dependencies for")]
-        symbol: String,
-        #[tool(param)]
-        #[schemars(description = "Maximum traversal depth (default 5, max 50)")]
-        max_depth: Option<u32>,
-    ) -> String {
-        let node = match self.resolve_symbol(&symbol) {
-            Some(n) => n,
-            None => {
-                return json_text(
-                    &serde_json::json!({"error": format!("Symbol \"{}\" not found in the graph.", symbol)}),
-                )
-            }
-        };
-        let store = self.store.lock().unwrap();
-        let traversal = GraphTraversal::new(&store);
-        let depth = max_depth.unwrap_or(5).min(50);
-        match traversal.find_dependencies(&node.id, depth) {
-            Ok(deps) => json_text(&serde_json::json!({
-                "source": {"id": node.id, "name": node.name, "kind": node.kind.as_str(), "filePath": node.file_path},
-                "dependencyCount": deps.len(),
-                "dependencies": deps.iter().map(|d| serde_json::json!({
-                    "id": d.node.id, "name": d.node.name, "kind": d.node.kind.as_str(),
-                    "filePath": d.node.file_path, "startLine": d.node.start_line, "depth": d.depth,
-                })).collect::<Vec<_>>(),
-            })),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+    async fn codegraph_dependencies(&self, Parameters(p): Parameters<SymbolDepthParams>) -> String {
+        super::tools_core::handle_dependencies(&self.store, &p.symbol, p.max_depth)
     }
 
     // 3. codegraph_callers — Reverse call graph traversal
     #[tool(
         name = "codegraph_callers",
-        description = "Find all callers of a symbol (who calls this function/method). Returns a caller tree with depth levels. Use instead of Grep for caller analysis — 100% precise, no false positives."
+        description = "Find what CALLS this function/method. Returns a caller tree with depth levels. Use instead of Grep for caller analysis — 100% precise, no false positives. For all reference types (not just calls), use codegraph_find_references."
     )]
     async fn codegraph_callers(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Symbol name or node ID to find callers for")]
-        symbol: String,
-        #[tool(param)]
-        #[schemars(description = "Maximum traversal depth (default 5, max 50)")]
-        max_depth: Option<u32>,
+        Parameters(p): Parameters<SymbolDepthDetailParams>,
     ) -> String {
-        let node = match self.resolve_symbol(&symbol) {
-            Some(n) => n,
-            None => {
-                return json_text(
-                    &serde_json::json!({"error": format!("Symbol \"{}\" not found in the graph.", symbol)}),
-                )
-            }
-        };
-        let store = self.store.lock().unwrap();
-        let traversal = GraphTraversal::new(&store);
-        let depth = max_depth.unwrap_or(5).min(50);
-        match traversal.find_callers(&node.id, depth) {
-            Ok(callers) => json_text(&serde_json::json!({
-                "target": {"id": node.id, "name": node.name, "kind": node.kind.as_str(), "filePath": node.file_path},
-                "callerCount": callers.len(),
-                "callers": callers.iter().map(|c| serde_json::json!({
-                    "id": c.node.id, "name": c.node.name, "kind": c.node.kind.as_str(),
-                    "filePath": c.node.file_path, "startLine": c.node.start_line, "depth": c.depth,
-                })).collect::<Vec<_>>(),
-            })),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+        super::tools_core::handle_callers(&self.store, &p.symbol, p.max_depth, p.detail_level)
     }
 
     // 4. codegraph_callees — Forward call graph traversal
@@ -272,35 +561,9 @@ impl CodeGraphServer {
     )]
     async fn codegraph_callees(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Symbol name or node ID to find callees for")]
-        symbol: String,
-        #[tool(param)]
-        #[schemars(description = "Maximum traversal depth (default 5, max 50)")]
-        max_depth: Option<u32>,
+        Parameters(p): Parameters<SymbolDepthDetailParams>,
     ) -> String {
-        let node = match self.resolve_symbol(&symbol) {
-            Some(n) => n,
-            None => {
-                return json_text(
-                    &serde_json::json!({"error": format!("Symbol \"{}\" not found in the graph.", symbol)}),
-                )
-            }
-        };
-        let store = self.store.lock().unwrap();
-        let traversal = GraphTraversal::new(&store);
-        let depth = max_depth.unwrap_or(5).min(50);
-        match traversal.find_callees(&node.id, depth) {
-            Ok(callees) => json_text(&serde_json::json!({
-                "source": {"id": node.id, "name": node.name, "kind": node.kind.as_str(), "filePath": node.file_path},
-                "calleeCount": callees.len(),
-                "callees": callees.iter().map(|c| serde_json::json!({
-                    "id": c.node.id, "name": c.node.name, "kind": c.node.kind.as_str(),
-                    "filePath": c.node.file_path, "startLine": c.node.start_line, "depth": c.depth,
-                })).collect::<Vec<_>>(),
-            })),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+        super::tools_core::handle_callees(&self.store, &p.symbol, p.max_depth, p.detail_level)
     }
 
     // 5. codegraph_impact — Blast radius analysis
@@ -308,106 +571,8 @@ impl CodeGraphServer {
         name = "codegraph_impact",
         description = "Analyze the blast radius of changing a file or symbol. Returns affected files and functions grouped by risk level. Use before refactoring to understand what might break."
     )]
-    async fn codegraph_impact(
-        &self,
-        #[tool(param)]
-        #[schemars(
-            description = "File path to analyze impact for (analyzes all symbols in the file)"
-        )]
-        file_path: Option<String>,
-        #[tool(param)]
-        #[schemars(description = "Symbol name or node ID to analyze impact for")]
-        symbol: Option<String>,
-    ) -> String {
-        // Resolve symbol first (before locking), then lock for the heavy work.
-        let targets: Vec<CodeNode> = if let Some(ref sym) = symbol {
-            match self.resolve_symbol(sym) {
-                Some(n) => vec![n],
-                None => {
-                    return json_text(
-                        &serde_json::json!({"error": format!("Symbol \"{}\" not found in the graph.", sym)}),
-                    )
-                }
-            }
-        } else if let Some(ref fp) = file_path {
-            let store = self.store.lock().unwrap();
-            match store.get_nodes_by_file(fp) {
-                Ok(nodes) if !nodes.is_empty() => nodes,
-                _ => {
-                    return json_text(
-                        &serde_json::json!({"error": format!("No symbols found in file \"{}\".", fp)}),
-                    )
-                }
-            }
-        } else {
-            return json_text(
-                &serde_json::json!({"error": "Either 'file_path' or 'symbol' must be provided."}),
-            );
-        };
-
-        let store = self.store.lock().unwrap();
-        let ranking = GraphRanking::new(&store);
-        let traversal = GraphTraversal::new(&store);
-
-        let mut all_affected: HashMap<String, (CodeNode, u32)> = HashMap::new();
-        let mut affected_files: HashSet<String> = HashSet::new();
-
-        for target in &targets {
-            let impact = ranking.compute_impact(&target.id);
-            for fp in &impact.affected_files {
-                affected_files.insert(fp.clone());
-            }
-            if let Ok(callers) = traversal.find_callers(&target.id, 10) {
-                for c in callers {
-                    let existing_depth = all_affected.get(&c.node.id).map(|(_, d)| *d);
-                    if existing_depth.is_none() || c.depth < existing_depth.unwrap() {
-                        all_affected.insert(c.node.id.clone(), (c.node, c.depth));
-                    }
-                }
-            }
-        }
-
-        let mut high = Vec::new();
-        let mut medium = Vec::new();
-        let mut low = Vec::new();
-
-        for (node, depth) in all_affected.values() {
-            let entry = serde_json::json!({
-                "id": node.id, "name": node.name, "kind": node.kind.as_str(),
-                "filePath": node.file_path, "depth": depth,
-            });
-            if *depth <= 1 {
-                high.push(entry);
-            } else if *depth <= 3 {
-                medium.push(entry);
-            } else {
-                low.push(entry);
-            }
-        }
-
-        let mut risk_groups = Vec::new();
-        if !high.is_empty() {
-            risk_groups.push(serde_json::json!({"risk": "high", "symbols": high}));
-        }
-        if !medium.is_empty() {
-            risk_groups.push(serde_json::json!({"risk": "medium", "symbols": medium}));
-        }
-        if !low.is_empty() {
-            risk_groups.push(serde_json::json!({"risk": "low", "symbols": low}));
-        }
-
-        let mut sorted_files: Vec<_> = affected_files.into_iter().collect();
-        sorted_files.sort();
-
-        json_text(&serde_json::json!({
-            "analyzedSymbols": targets.iter().map(|t| serde_json::json!({
-                "id": t.id, "name": t.name, "kind": t.kind.as_str(),
-            })).collect::<Vec<_>>(),
-            "totalAffected": all_affected.len(),
-            "affectedFiles": sorted_files,
-            "affectedFileCount": sorted_files.len(),
-            "riskGroups": risk_groups,
-        }))
+    async fn codegraph_impact(&self, Parameters(p): Parameters<ImpactParams>) -> String {
+        super::tools_core::handle_impact(&self.store, p.file_path, p.symbol)
     }
 
     // 5. codegraph_structure — Project overview with PageRank
@@ -415,124 +580,8 @@ impl CodeGraphServer {
         name = "codegraph_structure",
         description = "Get a project overview: modules, key classes/functions, and dependency summary. Uses PageRank to identify the most important symbols. Use instead of Explore agents for project overview."
     )]
-    async fn codegraph_structure(
-        &self,
-        #[tool(param)]
-        #[schemars(
-            description = "Scope to a specific directory or file path (default: entire project)"
-        )]
-        path: Option<String>,
-        #[tool(param)]
-        #[schemars(description = "Number of top symbols to return per category (default 10)")]
-        depth: Option<usize>,
-    ) -> String {
-        let store = self.store.lock().unwrap();
-        let limit = depth.unwrap_or(10);
-
-        let stats = match store.get_stats() {
-            Ok(s) => s,
-            Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
-        };
-
-        let all_nodes = match store.get_all_nodes() {
-            Ok(nodes) => nodes,
-            Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
-        };
-
-        let scoped_nodes: Vec<&CodeNode> = if let Some(ref p) = path {
-            all_nodes
-                .iter()
-                .filter(|n| n.file_path.starts_with(p))
-                .collect()
-        } else {
-            all_nodes.iter().collect()
-        };
-
-        if scoped_nodes.is_empty() {
-            return json_text(&serde_json::json!({
-                "error": if let Some(p) = path {
-                    format!("No symbols found under path \"{}\".", p)
-                } else {
-                    "The code graph is empty. Index a directory first.".to_string()
-                }
-            }));
-        }
-
-        // File grouping
-        let mut files_by_dir: HashMap<String, Vec<String>> = HashMap::new();
-        let mut all_files = HashSet::new();
-        for node in &scoped_nodes {
-            all_files.insert(node.file_path.clone());
-            let parts: Vec<&str> = node.file_path.rsplitn(2, '/').collect();
-            let dir = if parts.len() > 1 {
-                parts[1].to_string()
-            } else {
-                ".".to_string()
-            };
-            let files = files_by_dir.entry(dir).or_default();
-            if !files.contains(&node.file_path) {
-                files.push(node.file_path.clone());
-            }
-        }
-
-        // PageRank
-        let ranking = GraphRanking::new(&store);
-        let page_rank = ranking.compute_page_rank(0.85, 100);
-        let node_id_set: HashSet<&str> = scoped_nodes.iter().map(|n| n.id.as_str()).collect();
-        let scoped_ranks: Vec<_> = page_rank
-            .iter()
-            .filter(|r| node_id_set.contains(r.node_id.as_str()))
-            .take(limit)
-            .collect();
-
-        let top_symbols: Vec<serde_json::Value> = scoped_ranks
-            .iter()
-            .map(|r| {
-                let node = store.get_node(&r.node_id).ok().flatten();
-                match node {
-                    Some(n) => serde_json::json!({
-                        "id": n.id, "name": n.name, "kind": n.kind.as_str(),
-                        "filePath": n.file_path, "score": r.score,
-                    }),
-                    None => serde_json::json!({
-                        "id": r.node_id, "name": r.node_id, "kind": "unknown",
-                        "filePath": "", "score": r.score,
-                    }),
-                }
-            })
-            .collect();
-
-        // Kind counts
-        let mut kind_counts: HashMap<&str, usize> = HashMap::new();
-        for node in &scoped_nodes {
-            *kind_counts.entry(node.kind.as_str()).or_insert(0) += 1;
-        }
-
-        // Modules
-        let mut modules: Vec<serde_json::Value> = files_by_dir
-            .iter()
-            .map(|(dir, files)| serde_json::json!({"directory": dir, "fileCount": files.len()}))
-            .collect();
-        modules.sort_by(|a, b| {
-            b["fileCount"]
-                .as_u64()
-                .unwrap_or(0)
-                .cmp(&a["fileCount"].as_u64().unwrap_or(0))
-        });
-        modules.truncate(limit);
-
-        json_text(&serde_json::json!({
-            "stats": {
-                "totalNodes": stats.nodes,
-                "totalEdges": stats.edges,
-                "totalFiles": stats.files,
-                "scopedNodes": scoped_nodes.len(),
-                "scopedFiles": all_files.len(),
-            },
-            "symbolsByKind": kind_counts,
-            "topSymbols": top_symbols,
-            "modules": modules,
-        }))
+    async fn codegraph_structure(&self, Parameters(p): Parameters<StructureParams>) -> String {
+        super::tools_core::handle_structure(&self.store, p.path, p.depth)
     }
 
     // 6. codegraph_tests — Test coverage discovery
@@ -540,58 +589,8 @@ impl CodeGraphServer {
         name = "codegraph_tests",
         description = "Find test files and functions that cover a given symbol. Returns test locations grouped by file."
     )]
-    async fn codegraph_tests(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Symbol name or node ID to find tests for")]
-        symbol: String,
-    ) -> String {
-        let node = match self.resolve_symbol(&symbol) {
-            Some(n) => n,
-            None => {
-                return json_text(
-                    &serde_json::json!({"error": format!("Symbol \"{}\" not found in the graph.", symbol)}),
-                )
-            }
-        };
-
-        let store = self.store.lock().unwrap();
-        let traversal = GraphTraversal::new(&store);
-
-        match traversal.find_tests(&node.id) {
-            Ok(test_nodes) => {
-                if test_nodes.is_empty() {
-                    return json_text(&serde_json::json!({
-                        "symbol": {"id": node.id, "name": node.name, "kind": node.kind.as_str()},
-                        "testCount": 0,
-                        "message": format!("No tests found that reference \"{}\".", node.name),
-                    }));
-                }
-
-                let mut by_file: HashMap<&str, Vec<serde_json::Value>> = HashMap::new();
-                for test in &test_nodes {
-                    by_file
-                        .entry(&test.file_path)
-                        .or_default()
-                        .push(serde_json::json!({
-                            "id": test.id, "name": test.name, "kind": test.kind.as_str(),
-                            "startLine": test.start_line,
-                        }));
-                }
-
-                let test_files: Vec<serde_json::Value> = by_file
-                    .into_iter()
-                    .map(|(fp, symbols)| serde_json::json!({"filePath": fp, "symbols": symbols}))
-                    .collect();
-
-                json_text(&serde_json::json!({
-                    "symbol": {"id": node.id, "name": node.name, "kind": node.kind.as_str(), "filePath": node.file_path},
-                    "testCount": test_nodes.len(),
-                    "testFiles": test_files,
-                }))
-            }
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+    async fn codegraph_tests(&self, Parameters(p): Parameters<SymbolParams>) -> String {
+        super::tools_core::handle_tests(&self.store, &p.symbol)
     }
 
     // 7. codegraph_context — 4-tier token-budgeted LLM context assembly
@@ -599,23 +598,8 @@ impl CodeGraphServer {
         name = "codegraph_context",
         description = "Assemble optimal context for Claude from the code graph. Uses a tiered approach (core -> near -> extended -> background) to pack the most relevant code within a token budget. Use instead of reading multiple files — provides pre-ranked, token-budgeted context."
     )]
-    async fn codegraph_context(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Natural language question or topic to gather context for")]
-        query: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Token budget for the context document (default 8000, max 100000)"
-        )]
-        budget: Option<usize>,
-    ) -> String {
-        let store = self.store.lock().unwrap();
-        let search = HybridSearch::new(&store.conn);
-        let budget = budget.map(|b| b.min(100_000));
-
-        let assembler = ContextAssembler::new(&store.conn, &search);
-        assembler.assemble_context(&query, budget)
+    async fn codegraph_context(&self, Parameters(p): Parameters<ContextParams>) -> String {
+        super::tools_core::handle_context(&self.store, &p.query, p.budget, p.detail_level)
     }
 
     // 8. codegraph_diagram — Mermaid diagram generation
@@ -623,121 +607,8 @@ impl CodeGraphServer {
         name = "codegraph_diagram",
         description = "Generate a Mermaid diagram from the code graph. Supports dependency graphs, call graphs, and module-level diagrams."
     )]
-    async fn codegraph_diagram(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Symbol name or node ID to center the diagram on")]
-        symbol: Option<String>,
-        #[tool(param)]
-        #[schemars(description = "Diagram type: 'dependency' (default), 'call', or 'module'")]
-        diagram_type: Option<String>,
-    ) -> String {
-        let dt = diagram_type.as_deref().unwrap_or("dependency");
-
-        if dt == "module" {
-            let store = self.store.lock().unwrap();
-            let all_edges = match store.get_all_edges() {
-                Ok(e) => e,
-                Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
-            };
-            let all_nodes = match store.get_all_nodes() {
-                Ok(n) => n,
-                Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
-            };
-
-            if all_nodes.is_empty() {
-                return json_text(&serde_json::json!({"error": "The code graph is empty."}));
-            }
-
-            // Build file-level diagram
-            let node_file_map: HashMap<&str, &str> = all_nodes
-                .iter()
-                .map(|n| (n.id.as_str(), n.file_path.as_str()))
-                .collect();
-
-            let mut file_edges: HashMap<&str, HashSet<&str>> = HashMap::new();
-            for edge in &all_edges {
-                let src_file = node_file_map.get(edge.source.as_str());
-                let tgt_file = node_file_map.get(edge.target.as_str());
-                if let (Some(&sf), Some(&tf)) = (src_file, tgt_file) {
-                    if sf != tf {
-                        file_edges.entry(sf).or_default().insert(tf);
-                    }
-                }
-            }
-
-            let mut lines = Vec::new();
-            lines.push("```mermaid".to_string());
-            lines.push("graph LR".to_string());
-            lines.push("  %% Module dependency diagram".to_string());
-
-            let mut all_files = HashSet::new();
-            for (src, targets) in &file_edges {
-                all_files.insert(*src);
-                for tgt in targets {
-                    all_files.insert(*tgt);
-                }
-            }
-            for file in &all_files {
-                lines.push(format!(
-                    "  {}[\"{}\"]",
-                    mermaid_id(file),
-                    mermaid_safe(file)
-                ));
-            }
-            for (src, targets) in &file_edges {
-                let src_mid = mermaid_id(src);
-                for tgt in targets {
-                    lines.push(format!("  {} --> {}", src_mid, mermaid_id(tgt)));
-                }
-            }
-            lines.push("```".to_string());
-            return lines.join("\n");
-        }
-
-        // dependency or call diagram: requires a symbol
-        let sym = match symbol {
-            Some(ref s) => s.as_str(),
-            None => {
-                return json_text(
-                    &serde_json::json!({"error": "A 'symbol' is required for dependency and call diagrams."}),
-                )
-            }
-        };
-
-        let node = match self.resolve_symbol(sym) {
-            Some(n) => n,
-            None => {
-                return json_text(
-                    &serde_json::json!({"error": format!("Symbol \"{}\" not found in the graph.", sym)}),
-                )
-            }
-        };
-
-        let store = self.store.lock().unwrap();
-        let traversal = GraphTraversal::new(&store);
-
-        match traversal.get_neighborhood(&node.id, 2) {
-            Ok(neighborhood) => {
-                if dt == "call" {
-                    let call_edges: Vec<_> = neighborhood
-                        .edges
-                        .iter()
-                        .filter(|e| e.kind == crate::types::EdgeKind::Calls)
-                        .cloned()
-                        .collect();
-                    generate_graph_diagram(&node, &neighborhood.nodes, &call_edges, "Call Graph")
-                } else {
-                    generate_graph_diagram(
-                        &node,
-                        &neighborhood.nodes,
-                        &neighborhood.edges,
-                        "Dependency Graph",
-                    )
-                }
-            }
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+    async fn codegraph_diagram(&self, Parameters(p): Parameters<DiagramParams>) -> String {
+        super::tools_core::handle_diagram(&self.store, p.symbol, p.diagram_type)
     }
 
     // 9. codegraph_node — Direct node lookup with full details
@@ -745,103 +616,8 @@ impl CodeGraphServer {
         name = "codegraph_node",
         description = "Look up a specific code symbol by name or ID and return its full details including source code, documentation, file location, and relationships. Use instead of Grep for exact symbol lookup."
     )]
-    async fn codegraph_node(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Symbol name or node ID to look up")]
-        symbol: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Include relationships (callers, callees, dependencies) in the response (default false)"
-        )]
-        include_relations: Option<bool>,
-    ) -> String {
-        let node = match self.resolve_symbol(&symbol) {
-            Some(n) => n,
-            None => {
-                // Try fuzzy match: search for nodes containing the name
-                let store = self.store.lock().unwrap();
-                let like_query = format!("%{}%", symbol);
-                let mut stmt = match store.conn.prepare_cached(
-                    "SELECT * FROM nodes WHERE name LIKE ?1 ORDER BY name ASC LIMIT 10",
-                ) {
-                    Ok(s) => s,
-                    Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
-                };
-                let suggestions: Vec<String> = stmt
-                    .query_map(rusqlite::params![like_query], |row| row.get::<_, String>(2))
-                    .ok()
-                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
-                    .unwrap_or_default();
-
-                return json_text(&serde_json::json!({
-                    "error": format!("Symbol \"{}\" not found in the graph.", symbol),
-                    "suggestions": suggestions,
-                }));
-            }
-        };
-
-        let mut result = serde_json::json!({
-            "id": node.id,
-            "name": node.name,
-            "kind": node.kind.as_str(),
-            "filePath": node.file_path,
-            "startLine": node.start_line,
-            "endLine": node.end_line,
-            "language": node.language.as_str(),
-            "exported": node.exported,
-        });
-
-        if let Some(ref qn) = node.qualified_name {
-            result["qualifiedName"] = serde_json::json!(qn);
-        }
-        if let Some(ref doc) = node.documentation {
-            result["documentation"] = serde_json::json!(doc);
-        }
-        if let Some(ref body) = node.body {
-            result["body"] = serde_json::json!(body);
-        }
-
-        if include_relations.unwrap_or(false) {
-            let store = self.store.lock().unwrap();
-            let traversal = GraphTraversal::new(&store);
-
-            // Callers (depth 1 only)
-            if let Ok(callers) = traversal.find_callers(&node.id, 1) {
-                result["callers"] = serde_json::json!(callers.iter().map(|c| serde_json::json!({
-                    "name": c.node.name, "kind": c.node.kind.as_str(), "filePath": c.node.file_path,
-                })).collect::<Vec<_>>());
-            }
-
-            // Callees (depth 1 only)
-            if let Ok(callees) = traversal.find_callees(&node.id, 1) {
-                result["callees"] = serde_json::json!(callees.iter().map(|c| serde_json::json!({
-                    "name": c.node.name, "kind": c.node.kind.as_str(), "filePath": c.node.file_path,
-                })).collect::<Vec<_>>());
-            }
-
-            // Outgoing edges (all types)
-            if let Ok(out_edges) = store.get_out_edges(&node.id, None) {
-                result["outgoingEdges"] = serde_json::json!(out_edges
-                    .iter()
-                    .map(|e| serde_json::json!({
-                        "target": e.target, "kind": e.kind.as_str(),
-                    }))
-                    .collect::<Vec<_>>());
-            }
-
-            // Incoming edges (all types)
-            if let Ok(in_edges) = store.get_in_edges(&node.id, None) {
-                result["incomingEdges"] = serde_json::json!(in_edges
-                    .iter()
-                    .map(|e| serde_json::json!({
-                        "source": e.source, "kind": e.kind.as_str(),
-                    }))
-                    .collect::<Vec<_>>());
-            }
-        }
-
-        json_text(&result)
+    async fn codegraph_node(&self, Parameters(p): Parameters<NodeParams>) -> String {
+        super::tools_core::handle_node(&self.store, &p.symbol, p.include_relations, p.detail_level)
     }
 
     // 10. codegraph_dead_code — Find potentially unused symbols
@@ -849,64 +625,8 @@ impl CodeGraphServer {
         name = "codegraph_dead_code",
         description = "Find potentially unused/dead code symbols that have no incoming references"
     )]
-    async fn codegraph_dead_code(
-        &self,
-        #[tool(param)]
-        #[schemars(
-            description = "Filter by symbol kinds (comma-separated, e.g. 'function,class'). If omitted, all kinds are checked."
-        )]
-        kinds: Option<String>,
-        #[tool(param)]
-        #[schemars(description = "Include exported symbols in results (default false)")]
-        include_exported: Option<bool>,
-    ) -> String {
-        let kind_filter: Vec<NodeKind> = kinds
-            .as_deref()
-            .unwrap_or("")
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .filter_map(NodeKind::from_str_loose)
-            .collect();
-
-        let store = self.store.lock().unwrap();
-        let results = find_dead_code(&store.conn, &kind_filter);
-
-        // Note: include_exported is accepted as a parameter for future use.
-        // The underlying SQL query already excludes exported symbols by default.
-        let _ = include_exported;
-
-        if results.is_empty() {
-            return json_text(&serde_json::json!({
-                "deadCodeCount": 0,
-                "message": "No dead code found. All symbols have incoming references (or are excluded as exports/tests/entry points).",
-            }));
-        }
-
-        // Group by file for a cleaner output
-        let mut by_file: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
-        for r in &results {
-            by_file
-                .entry(r.file_path.clone())
-                .or_default()
-                .push(serde_json::json!({
-                    "id": r.id,
-                    "name": r.name,
-                    "kind": r.kind,
-                    "line": r.start_line,
-                }));
-        }
-
-        let mut files: Vec<serde_json::Value> = by_file
-            .into_iter()
-            .map(|(fp, symbols)| serde_json::json!({"filePath": fp, "symbols": symbols}))
-            .collect();
-        files.sort_by(|a, b| a["filePath"].as_str().cmp(&b["filePath"].as_str()));
-
-        json_text(&serde_json::json!({
-            "deadCodeCount": results.len(),
-            "files": files,
-        }))
+    async fn codegraph_dead_code(&self, Parameters(p): Parameters<DeadCodeParams>) -> String {
+        super::tools_core::handle_dead_code(&self.store, p.kinds, p.include_exported)
     }
 
     // 10. codegraph_frameworks — Detect frameworks and libraries
@@ -914,63 +634,8 @@ impl CodeGraphServer {
         name = "codegraph_frameworks",
         description = "Detect frameworks and libraries used in the project"
     )]
-    async fn codegraph_frameworks(
-        &self,
-        #[tool(param)]
-        #[schemars(
-            description = "Project directory to scan for manifests (defaults to the indexed project root)"
-        )]
-        project_dir: Option<String>,
-    ) -> String {
-        // Determine the project directory from the store's indexed files if not provided
-        let dir = if let Some(ref d) = project_dir {
-            d.clone()
-        } else {
-            // Infer from the first indexed file's path
-            let store = self.store.lock().unwrap();
-            match store.get_all_nodes() {
-                Ok(nodes) if !nodes.is_empty() => {
-                    // Find the common prefix of all file paths
-                    let mut paths: Vec<&str> = nodes.iter().map(|n| n.file_path.as_str()).collect();
-                    paths.sort();
-                    if let Some(first) = paths.first() {
-                        // Use the directory of the first file as a rough guess
-                        first.rsplitn(2, '/').last().unwrap_or(".").to_string()
-                    } else {
-                        ".".to_string()
-                    }
-                }
-                _ => ".".to_string(),
-            }
-        };
-
-        let frameworks = detect_frameworks(&dir);
-
-        if frameworks.is_empty() {
-            return json_text(&serde_json::json!({
-                "frameworkCount": 0,
-                "message": format!("No recognized frameworks detected in \"{}\".", dir),
-            }));
-        }
-
-        let entries: Vec<serde_json::Value> = frameworks
-            .iter()
-            .map(|f| {
-                serde_json::json!({
-                    "name": f.name,
-                    "version": f.version,
-                    "language": f.language,
-                    "category": f.category,
-                    "confidence": f.confidence,
-                })
-            })
-            .collect();
-
-        json_text(&serde_json::json!({
-            "frameworkCount": frameworks.len(),
-            "projectDir": dir,
-            "frameworks": entries,
-        }))
+    async fn codegraph_frameworks(&self, Parameters(p): Parameters<FrameworksParams>) -> String {
+        super::tools_core::handle_frameworks(&self.store, p.project_dir)
     }
 
     // 11. codegraph_languages — Language breakdown statistics
@@ -979,90 +644,43 @@ impl CodeGraphServer {
         description = "Show language breakdown statistics for the indexed codebase"
     )]
     async fn codegraph_languages(&self) -> String {
-        let store = self.store.lock().unwrap();
+        super::tools_core::handle_languages(&self.store)
+    }
 
-        // Query language stats from nodes table
-        let lang_query = "\
-            SELECT language, \
-                   COUNT(DISTINCT file_path) as file_count, \
-                   COUNT(*) as symbol_count \
-            FROM nodes \
-            GROUP BY language \
-            ORDER BY symbol_count DESC";
-
-        let edge_count_query = "\
-            SELECT n.language, COUNT(*) as edge_count \
-            FROM edges e \
-            JOIN nodes n ON n.id = e.source_id \
-            GROUP BY n.language";
-
-        let lang_stats: Vec<(String, i64, i64)> = match store.conn.prepare(lang_query) {
-            Ok(mut stmt) => {
-                let rows = stmt.query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                });
-                match rows {
-                    Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-                    Err(_) => Vec::new(),
-                }
+    // 46. codegraph_deep_query — Cross-encoder re-ranked search
+    #[tool(
+        name = "codegraph_deep_query",
+        description = "Deep search with cross-encoder re-ranking for maximum relevance. Runs hybrid search to gather candidates, then re-ranks them through a BAAI/bge-reranker-base cross-encoder that scores each (query, document) pair jointly. Much more accurate than codegraph_query for ambiguous or conceptual queries. Falls back to codegraph_query if the reranker model is unavailable."
+    )]
+    async fn codegraph_deep_query(&self, Parameters(p): Parameters<DeepQueryParams>) -> String {
+        let top_k = p.limit.unwrap_or(10);
+        // Gather candidates via hybrid search (fetch more than needed for re-ranking)
+        let candidates = {
+            let store = self.store.lock().unwrap_or_else(|e| e.into_inner());
+            let search = crate::graph::search::HybridSearch::new(&store.conn);
+            let opts = crate::graph::search::SearchOptions {
+                limit: Some(30),
+                ..Default::default()
+            };
+            match search.search(&p.query, &opts) {
+                Ok(results) => results,
+                Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
             }
-            Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
         };
 
-        if lang_stats.is_empty() {
-            return json_text(&serde_json::json!({
-                "languageCount": 0,
-                "message": "No indexed files found. Run 'codegraph index <dir>' first.",
-            }));
-        }
-
-        // Build edge counts per language
-        let mut edge_counts: HashMap<String, i64> = HashMap::new();
-        if let Ok(mut stmt) = store.conn.prepare(edge_count_query) {
-            if let Ok(rows) = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-            }) {
-                for row in rows.flatten() {
-                    edge_counts.insert(row.0, row.1);
+        #[cfg(feature = "reranking")]
+        {
+            if let Some(ref reranker) = self.reranker {
+                match crate::graph::reranker::deep_search(&p.query, reranker, candidates, top_k) {
+                    Ok(reranked) => return json_text(&reranked),
+                    Err(e) => return json_text(&serde_json::json!({"error": e})),
                 }
             }
         }
 
-        let total_symbols: i64 = lang_stats.iter().map(|(_, _, s)| s).sum();
-
-        let languages: Vec<serde_json::Value> = lang_stats
-            .iter()
-            .map(|(lang, files, symbols)| {
-                let pct = if total_symbols > 0 {
-                    (*symbols as f64 / total_symbols as f64) * 100.0
-                } else {
-                    0.0
-                };
-                let edges = edge_counts.get(lang).copied().unwrap_or(0);
-                serde_json::json!({
-                    "language": lang,
-                    "files": files,
-                    "symbols": symbols,
-                    "edges": edges,
-                    "percentage": format!("{:.1}%", pct),
-                })
-            })
-            .collect();
-
-        let total_files: i64 = lang_stats.iter().map(|(_, f, _)| f).sum();
-        let total_edges: i64 = edge_counts.values().sum();
-
-        json_text(&serde_json::json!({
-            "languageCount": lang_stats.len(),
-            "totalFiles": total_files,
-            "totalSymbols": total_symbols,
-            "totalEdges": total_edges,
-            "languages": languages,
-        }))
+        // Fallback: no reranker available, return truncated hybrid results
+        let truncated: Vec<_> = candidates.into_iter().take(top_k).collect();
+        json_text(&truncated)
     }
 
     // =========================================================================
@@ -1074,23 +692,8 @@ impl CodeGraphServer {
         name = "codegraph_blame",
         description = "Show git blame for a file — line-by-line author, date, and commit hash. Use instead of running git blame via Bash."
     )]
-    async fn codegraph_blame(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "File path to blame")]
-        file_path: String,
-    ) -> String {
-        match git::blame::git_blame(&self.project_root, &file_path) {
-            Ok(lines) => json_text(&serde_json::json!({
-                "file": file_path,
-                "lineCount": lines.len(),
-                "lines": lines.iter().map(|l| serde_json::json!({
-                    "line": l.line_number, "author": l.author, "email": l.email,
-                    "date": l.date, "commit": l.commit_hash, "content": l.content,
-                })).collect::<Vec<_>>(),
-            })),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+    async fn codegraph_blame(&self, Parameters(p): Parameters<FilePathParams>) -> String {
+        super::tools_git::handle_blame(&self.project_root, &p.file_path)
     }
 
     // 15. codegraph_file_history
@@ -1098,26 +701,8 @@ impl CodeGraphServer {
         name = "codegraph_file_history",
         description = "Show commit history for a specific file."
     )]
-    async fn codegraph_file_history(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "File path to get history for")]
-        file_path: String,
-        #[tool(param)]
-        #[schemars(description = "Maximum commits to return (default 20)")]
-        limit: Option<usize>,
-    ) -> String {
-        match git::history::file_history(&self.project_root, &file_path, limit.unwrap_or(20)) {
-            Ok(commits) => json_text(&serde_json::json!({
-                "file": file_path,
-                "commitCount": commits.len(),
-                "commits": commits.iter().map(|c| serde_json::json!({
-                    "hash": c.hash, "author": c.author, "email": c.email,
-                    "date": c.date, "message": c.message,
-                })).collect::<Vec<_>>(),
-            })),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+    async fn codegraph_file_history(&self, Parameters(p): Parameters<FileHistoryParams>) -> String {
+        super::tools_git::handle_file_history(&self.project_root, &p.file_path, p.limit)
     }
 
     // 16. codegraph_recent_changes
@@ -1125,22 +710,8 @@ impl CodeGraphServer {
         name = "codegraph_recent_changes",
         description = "Show recent commits across the repository."
     )]
-    async fn codegraph_recent_changes(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Number of recent commits (default 20)")]
-        limit: Option<usize>,
-    ) -> String {
-        match git::history::recent_changes(&self.project_root, limit.unwrap_or(20)) {
-            Ok(commits) => json_text(&serde_json::json!({
-                "commitCount": commits.len(),
-                "commits": commits.iter().map(|c| serde_json::json!({
-                    "hash": c.hash, "author": c.author, "email": c.email,
-                    "date": c.date, "message": c.message,
-                })).collect::<Vec<_>>(),
-            })),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+    async fn codegraph_recent_changes(&self, Parameters(p): Parameters<LimitParams>) -> String {
+        super::tools_git::handle_recent_changes(&self.project_root, p.limit)
     }
 
     // 17. codegraph_commit_diff
@@ -1148,23 +719,8 @@ impl CodeGraphServer {
         name = "codegraph_commit_diff",
         description = "Show the diff of a specific commit."
     )]
-    async fn codegraph_commit_diff(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Commit hash to show diff for")]
-        commit: String,
-    ) -> String {
-        match git::history::commit_diff(&self.project_root, &commit) {
-            Ok(diff) => json_text(&serde_json::json!({
-                "commit": diff.commit,
-                "fileCount": diff.files.len(),
-                "files": diff.files.iter().map(|f| serde_json::json!({
-                    "path": f.path, "additions": f.additions, "deletions": f.deletions,
-                    "patch": f.patch,
-                })).collect::<Vec<_>>(),
-            })),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+    async fn codegraph_commit_diff(&self, Parameters(p): Parameters<CommitParams>) -> String {
+        super::tools_git::handle_commit_diff(&self.project_root, &p.commit)
     }
 
     // 18. codegraph_symbol_history
@@ -1172,23 +728,8 @@ impl CodeGraphServer {
         name = "codegraph_symbol_history",
         description = "Find commits that modified a specific symbol (uses git log -S)."
     )]
-    async fn codegraph_symbol_history(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Symbol name to search for in commit history")]
-        symbol: String,
-    ) -> String {
-        match git::history::symbol_history(&self.project_root, &symbol) {
-            Ok(commits) => json_text(&serde_json::json!({
-                "symbol": symbol,
-                "commitCount": commits.len(),
-                "commits": commits.iter().map(|c| serde_json::json!({
-                    "hash": c.hash, "author": c.author, "email": c.email,
-                    "date": c.date, "message": c.message,
-                })).collect::<Vec<_>>(),
-            })),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+    async fn codegraph_symbol_history(&self, Parameters(p): Parameters<SymbolParams>) -> String {
+        super::tools_git::handle_symbol_history(&self.project_root, &p.symbol)
     }
 
     // 19. codegraph_branch_info
@@ -1197,13 +738,7 @@ impl CodeGraphServer {
         description = "Show current branch, tracking status, and ahead/behind counts."
     )]
     async fn codegraph_branch_info(&self) -> String {
-        match git::history::branch_info(&self.project_root) {
-            Ok(info) => json_text(&serde_json::json!({
-                "current": info.current, "tracking": info.tracking,
-                "ahead": info.ahead, "behind": info.behind, "status": info.status,
-            })),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+        super::tools_git::handle_branch_info(&self.project_root)
     }
 
     // 20. codegraph_modified_files
@@ -1212,13 +747,7 @@ impl CodeGraphServer {
         description = "Show working tree changes — staged, unstaged, and untracked files."
     )]
     async fn codegraph_modified_files(&self) -> String {
-        match git::history::modified_files(&self.project_root) {
-            Ok(mf) => json_text(&serde_json::json!({
-                "staged": mf.staged, "unstaged": mf.unstaged, "untracked": mf.untracked,
-                "totalChanges": mf.staged.len() + mf.unstaged.len() + mf.untracked.len(),
-            })),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+        super::tools_git::handle_modified_files(&self.project_root)
     }
 
     // 21. codegraph_hotspots
@@ -1226,22 +755,8 @@ impl CodeGraphServer {
         name = "codegraph_hotspots",
         description = "Find code hotspots — files with the most churn (commit count × recency)."
     )]
-    async fn codegraph_hotspots(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Number of hotspots to return (default 20)")]
-        limit: Option<usize>,
-    ) -> String {
-        match git::analysis::hotspots(&self.project_root, limit.unwrap_or(20)) {
-            Ok(spots) => json_text(&serde_json::json!({
-                "hotspotCount": spots.len(),
-                "hotspots": spots.iter().map(|h| serde_json::json!({
-                    "file": h.file, "commitCount": h.commit_count,
-                    "lastModified": h.last_modified, "score": h.score,
-                })).collect::<Vec<_>>(),
-            })),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+    async fn codegraph_hotspots(&self, Parameters(p): Parameters<LimitParams>) -> String {
+        super::tools_git::handle_hotspots(&self.project_root, p.limit)
     }
 
     // 22. codegraph_contributors
@@ -1251,20 +766,9 @@ impl CodeGraphServer {
     )]
     async fn codegraph_contributors(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Optional file path to scope contributors to")]
-        file_path: Option<String>,
+        Parameters(p): Parameters<OptionalFilePathParams>,
     ) -> String {
-        match git::analysis::contributors(&self.project_root, file_path.as_deref()) {
-            Ok(contribs) => json_text(&serde_json::json!({
-                "contributorCount": contribs.len(),
-                "contributors": contribs.iter().map(|c| serde_json::json!({
-                    "name": c.name, "email": c.email, "commits": c.commits,
-                    "linesAdded": c.lines_added, "linesRemoved": c.lines_removed,
-                })).collect::<Vec<_>>(),
-            })),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+        super::tools_git::handle_contributors(&self.project_root, p.file_path.as_deref())
     }
 
     // =========================================================================
@@ -1274,92 +778,35 @@ impl CodeGraphServer {
     // 23. codegraph_scan_security
     #[tool(
         name = "codegraph_scan_security",
-        description = "Scan a directory for security vulnerabilities using YAML-based pattern matching rules. Use instead of grep-based pattern matching for vulnerability detection."
+        description = "Scan a directory for security vulnerabilities using YAML-based pattern matching rules. Use instead of grep-based pattern matching for vulnerability detection. This is the primary security scanning tool. Supports filtering by standard (OWASP, CWE, or all)."
     )]
     async fn codegraph_scan_security(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Directory to scan (defaults to project root)")]
-        directory: Option<String>,
-        #[tool(param)]
-        #[schemars(description = "Exclude test files from scan (default true)")]
-        exclude_tests: Option<bool>,
+        Parameters(p): Parameters<ScanSecurityParams>,
     ) -> String {
-        let dir = directory
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.project_root.clone());
-        let rules = security::rules::load_bundled_rules();
-        let summary =
-            security::scanner::scan_directory(&dir, &rules, exclude_tests.unwrap_or(true));
-        json_text(&serde_json::json!({
-            "totalFindings": summary.total_findings,
-            "critical": summary.critical, "high": summary.high,
-            "medium": summary.medium, "low": summary.low,
-            "filesScanned": summary.files_scanned,
-            "rulesApplied": summary.rules_applied,
-            "topIssues": summary.top_issues.iter().map(|(name, count)| serde_json::json!({"rule": name, "count": count})).collect::<Vec<_>>(),
-            "findings": summary.findings.iter().take(50).map(|f| serde_json::json!({
-                "ruleId": f.rule_id, "ruleName": f.rule_name, "severity": format!("{:?}", f.severity),
-                "file": f.file_path, "line": f.line_number, "message": f.message,
-                "fix": f.fix, "cwe": f.cwe, "owasp": f.owasp,
-            })).collect::<Vec<_>>(),
-        }))
+        super::tools_security::handle_scan_security(
+            &self.project_root,
+            p.directory,
+            p.exclude_tests,
+        )
     }
 
     // 24. codegraph_check_owasp
     #[tool(
         name = "codegraph_check_owasp",
-        description = "Scan for OWASP Top 10 2021 vulnerabilities."
+        description = "Scan for OWASP Top 10 2021 vulnerabilities. Shortcut for codegraph_scan_security with OWASP Top 10 focus. For comprehensive scanning, use codegraph_scan_security instead."
     )]
-    async fn codegraph_check_owasp(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Directory to scan (defaults to project root)")]
-        directory: Option<String>,
-    ) -> String {
-        let dir = directory
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.project_root.clone());
-        let summary = security::scanner::check_owasp_top10(&dir);
-        json_text(&serde_json::json!({
-            "standard": "OWASP Top 10 2021",
-            "totalFindings": summary.total_findings,
-            "critical": summary.critical, "high": summary.high,
-            "medium": summary.medium, "low": summary.low,
-            "findings": summary.findings.iter().take(50).map(|f| serde_json::json!({
-                "ruleId": f.rule_id, "severity": format!("{:?}", f.severity),
-                "file": f.file_path, "line": f.line_number, "message": f.message,
-                "owasp": f.owasp,
-            })).collect::<Vec<_>>(),
-        }))
+    async fn codegraph_check_owasp(&self, Parameters(p): Parameters<OptionalDirParams>) -> String {
+        super::tools_security::handle_check_owasp(&self.project_root, p.directory)
     }
 
     // 25. codegraph_check_cwe
     #[tool(
         name = "codegraph_check_cwe",
-        description = "Scan for CWE Top 25 most dangerous software weaknesses."
+        description = "Scan for CWE Top 25 most dangerous software weaknesses. Shortcut for codegraph_scan_security with CWE Top 25 focus. For comprehensive scanning, use codegraph_scan_security instead."
     )]
-    async fn codegraph_check_cwe(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Directory to scan (defaults to project root)")]
-        directory: Option<String>,
-    ) -> String {
-        let dir = directory
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.project_root.clone());
-        let summary = security::scanner::check_cwe_top25(&dir);
-        json_text(&serde_json::json!({
-            "standard": "CWE Top 25",
-            "totalFindings": summary.total_findings,
-            "critical": summary.critical, "high": summary.high,
-            "medium": summary.medium, "low": summary.low,
-            "findings": summary.findings.iter().take(50).map(|f| serde_json::json!({
-                "ruleId": f.rule_id, "severity": format!("{:?}", f.severity),
-                "file": f.file_path, "line": f.line_number, "message": f.message,
-                "cwe": f.cwe,
-            })).collect::<Vec<_>>(),
-        }))
+    async fn codegraph_check_cwe(&self, Parameters(p): Parameters<OptionalDirParams>) -> String {
+        super::tools_security::handle_check_cwe(&self.project_root, p.directory)
     }
 
     // 26. codegraph_explain_vulnerability
@@ -1369,21 +816,9 @@ impl CodeGraphServer {
     )]
     async fn codegraph_explain_vulnerability(
         &self,
-        #[tool(param)]
-        #[schemars(description = "CWE identifier (e.g. 'CWE-89')")]
-        cwe_id: String,
+        Parameters(p): Parameters<CweIdParams>,
     ) -> String {
-        match security::scanner::explain_vulnerability(&cwe_id) {
-            Some(explanation) => json_text(&serde_json::json!({
-                "cweId": explanation.cwe_id, "name": explanation.name,
-                "severity": explanation.severity, "description": explanation.description,
-                "impact": explanation.impact, "remediation": explanation.remediation,
-                "references": explanation.references,
-            })),
-            None => json_text(&serde_json::json!({
-                "error": format!("No explanation found for {}", cwe_id),
-            })),
-        }
+        super::tools_security::handle_explain_vulnerability(&p.cwe_id)
     }
 
     // 27. codegraph_suggest_fix
@@ -1391,35 +826,8 @@ impl CodeGraphServer {
         name = "codegraph_suggest_fix",
         description = "Suggest a fix for a specific security finding."
     )]
-    async fn codegraph_suggest_fix(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Rule ID of the finding (e.g. 'sql-injection-string-format')")]
-        rule_id: String,
-        #[tool(param)]
-        #[schemars(description = "The matched vulnerable code snippet")]
-        matched_code: String,
-    ) -> String {
-        let finding = security::scanner::SecurityFinding {
-            rule_id: rule_id.clone(),
-            rule_name: rule_id.clone(),
-            severity: security::rules::Severity::High,
-            file_path: String::new(),
-            line_number: 0,
-            column: 0,
-            matched_text: matched_code.clone(),
-            message: String::new(),
-            fix: None,
-            cwe: None,
-            owasp: None,
-            category: security::rules::RuleCategory::Other,
-        };
-        let fix = security::scanner::suggest_fix(&finding);
-        json_text(&serde_json::json!({
-            "ruleId": rule_id,
-            "matchedCode": matched_code,
-            "suggestedFix": fix,
-        }))
+    async fn codegraph_suggest_fix(&self, Parameters(p): Parameters<SuggestFixParams>) -> String {
+        super::tools_security::handle_suggest_fix(&p.rule_id, &p.matched_code)
     }
 
     // 28. codegraph_find_injections
@@ -1429,23 +837,9 @@ impl CodeGraphServer {
     )]
     async fn codegraph_find_injections(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Source code to analyze")]
-        source: String,
-        #[tool(param)]
-        #[schemars(description = "Programming language (e.g. 'python', 'javascript')")]
-        language: String,
+        Parameters(p): Parameters<SourceLangParams>,
     ) -> String {
-        let flows = security::taint::find_injection_vulnerabilities(&source, &language);
-        json_text(&serde_json::json!({
-            "vulnerabilityCount": flows.len(),
-            "flows": flows.iter().map(|f| serde_json::json!({
-                "type": f.vulnerability_type,
-                "source": { "kind": format!("{:?}", f.source.kind), "line": f.source.line_number, "expression": f.source.expression },
-                "sink": { "kind": format!("{:?}", f.sink.kind), "line": f.sink.line_number, "expression": f.sink.expression },
-                "pathLength": f.path.len(),
-            })).collect::<Vec<_>>(),
-        }))
+        super::tools_security::handle_find_injections(&p.source, &p.language)
     }
 
     // 29. codegraph_taint_sources
@@ -1453,24 +847,8 @@ impl CodeGraphServer {
         name = "codegraph_taint_sources",
         description = "Find all taint sources (user input, file reads, network requests) in source code."
     )]
-    async fn codegraph_taint_sources(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Source code to analyze")]
-        source: String,
-        #[tool(param)]
-        #[schemars(description = "Programming language (e.g. 'python', 'javascript')")]
-        language: String,
-    ) -> String {
-        let sources = security::taint::find_taint_sources(&source, &language);
-        json_text(&serde_json::json!({
-            "sourceCount": sources.len(),
-            "sources": sources.iter().map(|s| serde_json::json!({
-                "kind": format!("{:?}", s.kind),
-                "file": s.file_path, "line": s.line_number,
-                "expression": s.expression,
-            })).collect::<Vec<_>>(),
-        }))
+    async fn codegraph_taint_sources(&self, Parameters(p): Parameters<SourceLangParams>) -> String {
+        super::tools_security::handle_taint_sources(&p.source, &p.language)
     }
 
     // 30. codegraph_security_summary
@@ -1480,23 +858,9 @@ impl CodeGraphServer {
     )]
     async fn codegraph_security_summary(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Directory to analyze (defaults to project root)")]
-        directory: Option<String>,
+        Parameters(p): Parameters<OptionalDirParams>,
     ) -> String {
-        let dir = directory
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.project_root.clone());
-        let rules = security::rules::load_bundled_rules();
-        let summary = security::scanner::scan_directory(&dir, &rules, true);
-        json_text(&serde_json::json!({
-            "riskLevel": if summary.critical > 0 { "CRITICAL" } else if summary.high > 0 { "HIGH" } else if summary.medium > 0 { "MEDIUM" } else { "LOW" },
-            "totalFindings": summary.total_findings,
-            "bySeverity": { "critical": summary.critical, "high": summary.high, "medium": summary.medium, "low": summary.low },
-            "filesScanned": summary.files_scanned,
-            "rulesApplied": summary.rules_applied,
-            "topIssues": summary.top_issues,
-        }))
+        super::tools_security::handle_security_summary(&self.project_root, p.directory)
     }
 
     // 31. codegraph_trace_taint
@@ -1504,31 +868,8 @@ impl CodeGraphServer {
         name = "codegraph_trace_taint",
         description = "Trace data flow from a specific source line to find where tainted data flows."
     )]
-    async fn codegraph_trace_taint(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Source code to analyze")]
-        source: String,
-        #[tool(param)]
-        #[schemars(description = "Programming language")]
-        language: String,
-        #[tool(param)]
-        #[schemars(description = "Line number to trace from")]
-        from_line: usize,
-    ) -> String {
-        let flows = security::taint::trace_taint(&source, &language, from_line);
-        json_text(&serde_json::json!({
-            "fromLine": from_line,
-            "flowCount": flows.len(),
-            "flows": flows.iter().map(|f| serde_json::json!({
-                "type": f.vulnerability_type,
-                "source": { "line": f.source.line_number, "expression": f.source.expression },
-                "sink": { "line": f.sink.line_number, "expression": f.sink.expression },
-                "steps": f.path.iter().map(|s| serde_json::json!({
-                    "line": s.line_number, "code": s.code, "operation": s.operation,
-                })).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
-        }))
+    async fn codegraph_trace_taint(&self, Parameters(p): Parameters<TraceTaintParams>) -> String {
+        super::tools_security::handle_trace_taint(&p.source, &p.language, p.from_line)
     }
 
     // =========================================================================
@@ -1541,19 +882,7 @@ impl CodeGraphServer {
         description = "Show index statistics — node, edge, file counts, and unresolved references."
     )]
     async fn codegraph_stats(&self) -> String {
-        let store = self.store.lock().unwrap();
-        match store.get_stats() {
-            Ok(stats) => {
-                let unresolved = store.get_unresolved_ref_count().unwrap_or(0);
-                json_text(&serde_json::json!({
-                    "nodes": stats.nodes,
-                    "edges": stats.edges,
-                    "files": stats.files,
-                    "unresolvedRefs": unresolved,
-                }))
-            }
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+        super::tools_analysis::handle_stats(&self.store)
     }
 
     // 33. codegraph_circular_imports
@@ -1562,26 +891,7 @@ impl CodeGraphServer {
         description = "Detect circular import dependencies using Tarjan's SCC algorithm."
     )]
     async fn codegraph_circular_imports(&self) -> String {
-        let store = self.store.lock().unwrap();
-        let traversal = GraphTraversal::new(&store);
-        match traversal.detect_cycles() {
-            Ok(cycles) => {
-                if cycles.is_empty() {
-                    return json_text(&serde_json::json!({
-                        "cycleCount": 0,
-                        "message": "No circular imports detected.",
-                    }));
-                }
-                json_text(&serde_json::json!({
-                    "cycleCount": cycles.len(),
-                    "cycles": cycles.iter().map(|c| serde_json::json!({
-                        "size": c.size,
-                        "nodes": c.node_ids,
-                    })).collect::<Vec<_>>(),
-                }))
-            }
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+        super::tools_analysis::handle_circular_imports(&self.store)
     }
 
     // 34. codegraph_project_tree
@@ -1589,108 +899,17 @@ impl CodeGraphServer {
         name = "codegraph_project_tree",
         description = "Show a directory tree of the indexed project with file counts per directory."
     )]
-    async fn codegraph_project_tree(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Maximum directory depth (default 3)")]
-        max_depth: Option<usize>,
-    ) -> String {
-        let store = self.store.lock().unwrap();
-        let all_nodes = match store.get_all_nodes() {
-            Ok(n) => n,
-            Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
-        };
-
-        let mut dir_files: HashMap<String, HashSet<String>> = HashMap::new();
-        for node in &all_nodes {
-            let parts: Vec<&str> = node.file_path.rsplitn(2, '/').collect();
-            let dir = if parts.len() > 1 {
-                parts[1].to_string()
-            } else {
-                ".".to_string()
-            };
-            dir_files
-                .entry(dir)
-                .or_default()
-                .insert(node.file_path.clone());
-        }
-
-        let depth = max_depth.unwrap_or(3);
-        let mut tree: Vec<serde_json::Value> = dir_files
-            .iter()
-            .filter(|(dir, _)| dir.matches('/').count() < depth)
-            .map(|(dir, files)| {
-                let symbol_count = all_nodes
-                    .iter()
-                    .filter(|n| {
-                        let parts: Vec<&str> = n.file_path.rsplitn(2, '/').collect();
-                        let ndir = if parts.len() > 1 { parts[1] } else { "." };
-                        ndir == dir
-                    })
-                    .count();
-                serde_json::json!({
-                    "directory": dir,
-                    "fileCount": files.len(),
-                    "symbolCount": symbol_count,
-                })
-            })
-            .collect();
-        tree.sort_by(|a, b| a["directory"].as_str().cmp(&b["directory"].as_str()));
-
-        json_text(&serde_json::json!({
-            "directoryCount": tree.len(),
-            "totalFiles": all_nodes.iter().map(|n| &n.file_path).collect::<HashSet<_>>().len(),
-            "tree": tree,
-        }))
+    async fn codegraph_project_tree(&self, Parameters(p): Parameters<MaxDepthParams>) -> String {
+        super::tools_analysis::handle_project_tree(&self.store, p.max_depth)
     }
 
     // 35. codegraph_find_references
     #[tool(
         name = "codegraph_find_references",
-        description = "Find all references to a symbol across the codebase (all edge types). Use instead of Grep for cross-file reference search."
+        description = "Find ALL references to a symbol across the codebase (calls, imports, type usage, etc.). Use instead of Grep for cross-file reference search. For call-only relationships, use codegraph_callers instead."
     )]
-    async fn codegraph_find_references(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Symbol name or node ID to find references for")]
-        symbol: String,
-    ) -> String {
-        let node = match self.resolve_symbol(&symbol) {
-            Some(n) => n,
-            None => {
-                return json_text(
-                    &serde_json::json!({"error": format!("Symbol \"{}\" not found.", symbol)}),
-                )
-            }
-        };
-
-        let store = self.store.lock().unwrap();
-        let in_edges = store.get_in_edges(&node.id, None).unwrap_or_default();
-        let out_edges = store.get_out_edges(&node.id, None).unwrap_or_default();
-
-        let mut refs: Vec<serde_json::Value> = Vec::new();
-        for edge in &in_edges {
-            if let Ok(Some(src)) = store.get_node(&edge.source) {
-                refs.push(serde_json::json!({
-                    "direction": "incoming", "kind": edge.kind.as_str(),
-                    "symbol": src.name, "file": edge.file_path, "line": edge.line,
-                }));
-            }
-        }
-        for edge in &out_edges {
-            if let Ok(Some(tgt)) = store.get_node(&edge.target) {
-                refs.push(serde_json::json!({
-                    "direction": "outgoing", "kind": edge.kind.as_str(),
-                    "symbol": tgt.name, "file": edge.file_path, "line": edge.line,
-                }));
-            }
-        }
-
-        json_text(&serde_json::json!({
-            "symbol": {"name": node.name, "kind": node.kind.as_str(), "file": node.file_path},
-            "referenceCount": refs.len(),
-            "references": refs,
-        }))
+    async fn codegraph_find_references(&self, Parameters(p): Parameters<SymbolParams>) -> String {
+        super::tools_analysis::handle_find_references(&self.store, &p.symbol)
     }
 
     // 36. codegraph_export_map
@@ -1699,40 +918,7 @@ impl CodeGraphServer {
         description = "List all exported symbols grouped by file."
     )]
     async fn codegraph_export_map(&self) -> String {
-        let store = self.store.lock().unwrap();
-        let all_nodes = match store.get_all_nodes() {
-            Ok(n) => n,
-            Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
-        };
-
-        let exported: Vec<&CodeNode> = all_nodes
-            .iter()
-            .filter(|n| n.exported == Some(true))
-            .collect();
-
-        let mut by_file: HashMap<&str, Vec<serde_json::Value>> = HashMap::new();
-        for node in &exported {
-            by_file
-                .entry(&node.file_path)
-                .or_default()
-                .push(serde_json::json!({
-                    "name": node.name, "kind": node.kind.as_str(),
-                    "line": node.start_line,
-                    "qualifiedName": node.qualified_name,
-                }));
-        }
-
-        let mut files: Vec<serde_json::Value> = by_file
-            .into_iter()
-            .map(|(fp, symbols)| serde_json::json!({"filePath": fp, "exports": symbols}))
-            .collect();
-        files.sort_by(|a, b| a["filePath"].as_str().cmp(&b["filePath"].as_str()));
-
-        json_text(&serde_json::json!({
-            "totalExports": exported.len(),
-            "fileCount": files.len(),
-            "files": files,
-        }))
+        super::tools_analysis::handle_export_map(&self.store)
     }
 
     // 37. codegraph_import_graph
@@ -1742,72 +928,9 @@ impl CodeGraphServer {
     )]
     async fn codegraph_import_graph(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Optional directory to scope the import graph to")]
-        scope: Option<String>,
+        Parameters(p): Parameters<OptionalScopeParams>,
     ) -> String {
-        let store = self.store.lock().unwrap();
-        let all_edges = match store.get_all_edges() {
-            Ok(e) => e,
-            Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
-        };
-        let all_nodes = match store.get_all_nodes() {
-            Ok(n) => n,
-            Err(e) => return json_text(&serde_json::json!({"error": e.to_string()})),
-        };
-
-        let import_edges: Vec<_> = all_edges
-            .iter()
-            .filter(|e| e.kind == crate::types::EdgeKind::Imports)
-            .collect();
-
-        let node_file_map: HashMap<&str, &str> = all_nodes
-            .iter()
-            .map(|n| (n.id.as_str(), n.file_path.as_str()))
-            .collect();
-
-        let mut file_imports: HashMap<&str, HashSet<&str>> = HashMap::new();
-        for edge in &import_edges {
-            let src_file = node_file_map.get(edge.source.as_str());
-            let tgt_file = node_file_map.get(edge.target.as_str());
-            if let (Some(&sf), Some(&tf)) = (src_file, tgt_file) {
-                if sf != tf {
-                    if let Some(ref s) = scope {
-                        if !sf.starts_with(s.as_str()) && !tf.starts_with(s.as_str()) {
-                            continue;
-                        }
-                    }
-                    file_imports.entry(sf).or_default().insert(tf);
-                }
-            }
-        }
-
-        let mut lines = vec!["```mermaid".to_string(), "graph LR".to_string()];
-        let mut all_files = HashSet::new();
-        for (src, targets) in &file_imports {
-            all_files.insert(*src);
-            for tgt in targets {
-                all_files.insert(*tgt);
-            }
-        }
-        for file in &all_files {
-            lines.push(format!(
-                "  {}[\"{}\"]",
-                mermaid_id(file),
-                mermaid_safe(file)
-            ));
-        }
-        for (src, targets) in &file_imports {
-            for tgt in targets {
-                lines.push(format!(
-                    "  {} -->|imports| {}",
-                    mermaid_id(src),
-                    mermaid_id(tgt)
-                ));
-            }
-        }
-        lines.push("```".to_string());
-        lines.join("\n")
+        super::tools_analysis::handle_import_graph(&self.store, p.scope)
     }
 
     // 38. codegraph_file
@@ -1815,32 +938,8 @@ impl CodeGraphServer {
         name = "codegraph_file",
         description = "Get all symbols defined in a specific file. Use before reading a file to understand its structure first."
     )]
-    async fn codegraph_file(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "File path to get symbols for")]
-        file_path: String,
-    ) -> String {
-        let store = self.store.lock().unwrap();
-        match store.get_nodes_by_file(&file_path) {
-            Ok(nodes) => {
-                if nodes.is_empty() {
-                    return json_text(&serde_json::json!({
-                        "error": format!("No symbols found in file '{}'", file_path),
-                    }));
-                }
-                json_text(&serde_json::json!({
-                    "filePath": file_path,
-                    "symbolCount": nodes.len(),
-                    "symbols": nodes.iter().map(|n| serde_json::json!({
-                        "id": n.id, "name": n.name, "kind": n.kind.as_str(),
-                        "startLine": n.start_line, "endLine": n.end_line,
-                        "exported": n.exported, "qualifiedName": n.qualified_name,
-                    })).collect::<Vec<_>>(),
-                }))
-            }
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+    async fn codegraph_file(&self, Parameters(p): Parameters<FilePathParams>) -> String {
+        super::tools_analysis::handle_file(&self.store, &p.file_path)
     }
 
     // =========================================================================
@@ -1852,51 +951,8 @@ impl CodeGraphServer {
         name = "codegraph_find_path",
         description = "Find the shortest call path between two functions using BFS on the call graph."
     )]
-    async fn codegraph_find_path(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Source symbol name or node ID")]
-        from: String,
-        #[tool(param)]
-        #[schemars(description = "Target symbol name or node ID")]
-        to: String,
-        #[tool(param)]
-        #[schemars(description = "Maximum path depth (default 10)")]
-        max_depth: Option<u32>,
-    ) -> String {
-        let from_node = match self.resolve_symbol(&from) {
-            Some(n) => n,
-            None => {
-                return json_text(
-                    &serde_json::json!({"error": format!("Source symbol \"{}\" not found.", from)}),
-                )
-            }
-        };
-        let to_node = match self.resolve_symbol(&to) {
-            Some(n) => n,
-            None => {
-                return json_text(
-                    &serde_json::json!({"error": format!("Target symbol \"{}\" not found.", to)}),
-                )
-            }
-        };
-
-        let store = self.store.lock().unwrap();
-        let traversal = GraphTraversal::new(&store);
-        match traversal.find_call_path(&from_node.id, &to_node.id, max_depth.unwrap_or(10)) {
-            Ok(Some(path)) => json_text(&serde_json::json!({
-                "found": true,
-                "pathLength": path.len(),
-                "path": path.iter().map(|n| serde_json::json!({
-                    "name": n.name, "kind": n.kind.as_str(), "file": n.file_path, "line": n.start_line,
-                })).collect::<Vec<_>>(),
-            })),
-            Ok(None) => json_text(&serde_json::json!({
-                "found": false,
-                "message": format!("No call path found from \"{}\" to \"{}\".", from, to),
-            })),
-            Err(e) => json_text(&serde_json::json!({"error": e.to_string()})),
-        }
+    async fn codegraph_find_path(&self, Parameters(p): Parameters<FindPathParams>) -> String {
+        super::tools_dataflow::handle_find_path(&self.store, &p.from, &p.to, p.max_depth)
     }
 
     // 40. codegraph_complexity
@@ -1904,141 +960,83 @@ impl CodeGraphServer {
         name = "codegraph_complexity",
         description = "Calculate cyclomatic and cognitive complexity for all functions in the codebase."
     )]
-    async fn codegraph_complexity(
-        &self,
-        #[tool(param)]
-        #[schemars(
-            description = "Minimum cyclomatic complexity to include in results (default 5)"
-        )]
-        min_complexity: Option<u32>,
-    ) -> String {
-        let store = self.store.lock().unwrap();
-        let mut results = complexity::calculate_all_complexities(&store.conn);
-        let threshold = min_complexity.unwrap_or(5);
-        results.retain(|r| r.cyclomatic >= threshold);
-        results.sort_by(|a, b| b.cyclomatic.cmp(&a.cyclomatic));
-
-        json_text(&serde_json::json!({
-            "threshold": threshold,
-            "functionCount": results.len(),
-            "functions": results.iter().take(50).map(|r| serde_json::json!({
-                "name": r.name, "file": r.file_path,
-                "cyclomatic": r.cyclomatic, "cognitive": r.cognitive,
-                "lineCount": r.line_count,
-            })).collect::<Vec<_>>(),
-        }))
+    async fn codegraph_complexity(&self, Parameters(p): Parameters<ComplexityParams>) -> String {
+        super::tools_dataflow::handle_complexity(&self.store, p.min_complexity)
     }
 
     // 41. codegraph_data_flow
     #[tool(
         name = "codegraph_data_flow",
-        description = "Analyze variable def-use chains in source code."
+        description = "Analyze variable def-use chains. Pass file_path to read a file directly (language auto-detected), or pass source + language explicitly."
     )]
-    async fn codegraph_data_flow(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Source code to analyze")]
-        source: String,
-        #[tool(param)]
-        #[schemars(description = "Programming language (e.g. 'python', 'javascript')")]
-        language: String,
-    ) -> String {
-        let chains = dataflow::find_def_use_chains(&source, &language);
-        json_text(&serde_json::json!({
-            "variableCount": chains.len(),
-            "chains": chains.iter().map(|c| serde_json::json!({
-                "variable": c.variable,
-                "definitions": c.definitions.iter().map(|d| serde_json::json!({"line": d.line, "column": d.column})).collect::<Vec<_>>(),
-                "uses": c.uses.iter().map(|u| serde_json::json!({"line": u.line, "column": u.column})).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
-        }))
+    async fn codegraph_data_flow(&self, Parameters(p): Parameters<DataFlowParams>) -> String {
+        super::tools_dataflow::handle_data_flow(
+            p.file_path.as_deref(),
+            p.source.as_deref(),
+            p.language.as_deref(),
+            &self.project_root,
+        )
     }
 
     // 42. codegraph_dead_stores
     #[tool(
         name = "codegraph_dead_stores",
-        description = "Find variable assignments that are never subsequently read (dead stores)."
+        description = "Find variable assignments that are never subsequently read (dead stores). Pass file_path to read a file directly (language auto-detected), or pass source + language explicitly."
     )]
-    async fn codegraph_dead_stores(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Source code to analyze")]
-        source: String,
-        #[tool(param)]
-        #[schemars(description = "Programming language")]
-        language: String,
-    ) -> String {
-        let stores = dataflow::find_dead_stores(&source, &language);
-        json_text(&serde_json::json!({
-            "deadStoreCount": stores.len(),
-            "stores": stores.iter().map(|s| serde_json::json!({
-                "variable": s.variable, "line": s.line, "assignedValue": s.assigned_value,
-            })).collect::<Vec<_>>(),
-        }))
+    async fn codegraph_dead_stores(&self, Parameters(p): Parameters<DataFlowParams>) -> String {
+        super::tools_dataflow::handle_dead_stores(
+            p.file_path.as_deref(),
+            p.source.as_deref(),
+            p.language.as_deref(),
+            &self.project_root,
+        )
     }
 
     // 43. codegraph_find_uninitialized
     #[tool(
         name = "codegraph_find_uninitialized",
-        description = "Find variables used before initialization."
+        description = "Find variables used before initialization. Pass file_path to read a file directly (language auto-detected), or pass source + language explicitly."
     )]
     async fn codegraph_find_uninitialized(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Source code to analyze")]
-        source: String,
-        #[tool(param)]
-        #[schemars(description = "Programming language")]
-        language: String,
+        Parameters(p): Parameters<DataFlowParams>,
     ) -> String {
-        let locations = dataflow::find_uninitialized_uses(&source, &language);
-        json_text(&serde_json::json!({
-            "uninitializedCount": locations.len(),
-            "locations": locations.iter().map(|l| serde_json::json!({
-                "line": l.line, "column": l.column,
-            })).collect::<Vec<_>>(),
-        }))
+        super::tools_dataflow::handle_find_uninitialized(
+            p.file_path.as_deref(),
+            p.source.as_deref(),
+            p.language.as_deref(),
+            &self.project_root,
+        )
     }
 
     // 44. codegraph_reaching_defs
     #[tool(
         name = "codegraph_reaching_defs",
-        description = "Find which variable definitions reach a specific line."
+        description = "Find which variable definitions reach a specific line. Pass file_path to read a file directly (language auto-detected), or pass source + language explicitly."
     )]
     async fn codegraph_reaching_defs(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Source code to analyze")]
-        source: String,
-        #[tool(param)]
-        #[schemars(description = "Programming language")]
-        language: String,
-        #[tool(param)]
-        #[schemars(description = "Target line number")]
-        target_line: u32,
+        Parameters(p): Parameters<ReachingDefsParams>,
     ) -> String {
-        let chains = dataflow::find_reaching_defs(&source, &language, target_line);
-        json_text(&serde_json::json!({
-            "targetLine": target_line,
-            "variableCount": chains.len(),
-            "reachingDefinitions": chains.iter().map(|c| serde_json::json!({
-                "variable": c.variable,
-                "definitions": c.definitions.iter().map(|d| serde_json::json!({"line": d.line})).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
-        }))
+        super::tools_dataflow::handle_reaching_defs(
+            p.file_path.as_deref(),
+            p.source.as_deref(),
+            p.language.as_deref(),
+            p.target_line,
+            &self.project_root,
+        )
     }
 }
 
 // ---------------------------------------------------------------------------
-// ServerHandler impl (auto-wired by tool_box macro)
+// ServerHandler impl — manual list_tools/call_tool for preset filtering
 // ---------------------------------------------------------------------------
 
-#[tool(tool_box)]
 impl ServerHandler for CodeGraphServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "CodeGraph — codebase intelligence MCP server with 44 tools across 32 languages. \
+                "CodeGraph — codebase intelligence MCP server with 46 tools across 32 languages. \
                  ALWAYS prefer CodeGraph tools over Grep/Glob/Explore agents for code analysis: \
                  codegraph_query (semantic search), codegraph_dependencies (import tracing), \
                  codegraph_callers (call graph), codegraph_find_references (cross-file refs), \
@@ -2046,13 +1044,347 @@ impl ServerHandler for CodeGraphServer {
                  These use a pre-built AST index and return results in milliseconds."
                     .into(),
             ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .enable_prompts()
+                .build(),
             server_info: rmcp::model::Implementation {
                 name: "codegraph".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
+                ..Default::default()
             },
             ..Default::default()
         }
+    }
+
+    fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
+        let resources = vec![
+            Annotated::new(
+                RawResource {
+                    uri: "codegraph://status".into(),
+                    name: "Index Status".into(),
+                    title: None,
+                    description: Some(
+                        "CodeGraph index health: node, edge, file counts, and unresolved references."
+                            .into(),
+                    ),
+                    mime_type: Some("application/json".into()),
+                    size: None,
+                    icons: None,
+                    meta: None,
+                },
+                None,
+            ),
+            Annotated::new(
+                RawResource {
+                    uri: "codegraph://overview".into(),
+                    name: "Project Overview".into(),
+                    title: None,
+                    description: Some(
+                        "Project structure summary: top symbols by PageRank, file counts, language breakdown."
+                            .into(),
+                    ),
+                    mime_type: Some("application/json".into()),
+                    size: None,
+                    icons: None,
+                    meta: None,
+                },
+                None,
+            ),
+        ];
+        std::future::ready(Ok(ListResourcesResult {
+            meta: None,
+            next_cursor: None,
+            resources,
+        }))
+    }
+
+    fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
+        let result = match request.uri.as_str() {
+            "codegraph://status" => {
+                let store = self.store.lock().unwrap_or_else(|e| e.into_inner());
+                match store.get_stats() {
+                    Ok(stats) => {
+                        let unresolved = store.get_unresolved_ref_count().unwrap_or(0);
+                        let json = serde_json::json!({
+                            "version": env!("CARGO_PKG_VERSION"),
+                            "projectRoot": self.project_root.to_string_lossy(),
+                            "nodes": stats.nodes,
+                            "edges": stats.edges,
+                            "files": stats.files,
+                            "unresolvedRefs": unresolved,
+                            "status": "healthy",
+                        });
+                        Ok(ReadResourceResult {
+                            contents: vec![ResourceContents::text(
+                                serde_json::to_string_pretty(&json).unwrap_or_default(),
+                                "codegraph://status",
+                            )],
+                        })
+                    }
+                    Err(e) => Err(McpError::internal_error(
+                        format!("Failed to read index stats: {e}"),
+                        None,
+                    )),
+                }
+            }
+            "codegraph://overview" => {
+                let store = self.store.lock().unwrap_or_else(|e| e.into_inner());
+                let stats = match store.get_stats() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return std::future::ready(Err(McpError::internal_error(
+                            format!("Failed to read stats: {e}"),
+                            None,
+                        )));
+                    }
+                };
+                let all_nodes = store.get_all_nodes().unwrap_or_default();
+                let file_count = all_nodes
+                    .iter()
+                    .map(|n| &n.file_path)
+                    .collect::<HashSet<_>>()
+                    .len();
+
+                // Language breakdown
+                let mut lang_counts: HashMap<String, usize> = HashMap::new();
+                for node in &all_nodes {
+                    *lang_counts.entry(node.language.to_string()).or_default() += 1;
+                }
+                let mut langs: Vec<_> = lang_counts.into_iter().collect();
+                langs.sort_by(|a, b| b.1.cmp(&a.1));
+
+                // Top symbols by PageRank
+                let ranking = GraphRanking::new(&store);
+                let page_rank = ranking.compute_page_rank(0.85, 100);
+                let top_symbols: Vec<serde_json::Value> = page_rank
+                    .iter()
+                    .take(10)
+                    .filter_map(|r| {
+                        store.get_node(&r.node_id).ok().flatten().map(|n| {
+                            serde_json::json!({
+                                "name": n.name,
+                                "kind": n.kind.as_str(),
+                                "file": n.file_path,
+                                "rank": format!("{:.4}", r.score),
+                            })
+                        })
+                    })
+                    .collect();
+
+                let json = serde_json::json!({
+                    "totalNodes": stats.nodes,
+                    "totalEdges": stats.edges,
+                    "totalFiles": file_count,
+                    "languages": langs.iter().take(10).map(|(l, c)| serde_json::json!({"language": l, "symbols": c})).collect::<Vec<_>>(),
+                    "topSymbols": top_symbols,
+                });
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(
+                        serde_json::to_string_pretty(&json).unwrap_or_default(),
+                        "codegraph://overview",
+                    )],
+                })
+            }
+            uri => Err(McpError::resource_not_found(
+                format!("Unknown resource: {uri}"),
+                None,
+            )),
+        };
+        std::future::ready(result)
+    }
+
+    fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
+        let prompts = vec![
+            Prompt::new(
+                "review-security",
+                Some("Run a comprehensive security review on a directory — scans for OWASP Top 10, CWE Top 25, and injection vulnerabilities."),
+                Some(vec![PromptArgument {
+                    name: "directory".into(),
+                    title: None,
+                    description: Some("Directory path to scan for security vulnerabilities".into()),
+                    required: Some(true),
+                }]),
+            ),
+            Prompt::new(
+                "explain-function",
+                Some("Deep-dive into a function or method — shows its source, callers, callees, and surrounding context."),
+                Some(vec![PromptArgument {
+                    name: "symbol".into(),
+                    title: None,
+                    description: Some("Function or method name (or node ID) to explain".into()),
+                    required: Some(true),
+                }]),
+            ),
+            Prompt::new(
+                "pre-refactor-check",
+                Some("Analyze the blast radius before refactoring a symbol — shows callers, dependencies, and affected files."),
+                Some(vec![PromptArgument {
+                    name: "symbol".into(),
+                    title: None,
+                    description: Some("Symbol name (or node ID) to check before refactoring".into()),
+                    required: Some(true),
+                }]),
+            ),
+        ];
+        std::future::ready(Ok(ListPromptsResult {
+            meta: None,
+            next_cursor: None,
+            prompts,
+        }))
+    }
+
+    fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
+        let args = request.arguments.unwrap_or_default();
+
+        let result = match request.name.as_str() {
+            "review-security" => {
+                let directory = args
+                    .get("directory")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".");
+                Ok(GetPromptResult {
+                    description: Some("Security review workflow".into()),
+                    messages: vec![
+                        PromptMessage::new_text(
+                            PromptMessageRole::User,
+                            format!(
+                                "Run a comprehensive security review on the directory `{directory}`. \
+                                 Follow these steps:\n\n\
+                                 1. Call `codegraph_scan_security` with directory=\"{directory}\" to scan for all vulnerability patterns.\n\
+                                 2. Call `codegraph_check_owasp` with directory=\"{directory}\" for OWASP Top 10 coverage.\n\
+                                 3. Call `codegraph_check_cwe` with directory=\"{directory}\" for CWE Top 25 coverage.\n\
+                                 4. For any high/critical findings, call `codegraph_suggest_fix` with the rule_id and matched_code.\n\
+                                 5. Summarize all findings grouped by severity with remediation recommendations."
+                            ),
+                        ),
+                    ],
+                })
+            }
+            "explain-function" => {
+                let symbol = args
+                    .get("symbol")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                Ok(GetPromptResult {
+                    description: Some("Function deep-dive workflow".into()),
+                    messages: vec![
+                        PromptMessage::new_text(
+                            PromptMessageRole::User,
+                            format!(
+                                "Explain the function/method `{symbol}` in detail. Follow these steps:\n\n\
+                                 1. Call `codegraph_node` with symbol=\"{symbol}\" and include_relations=true, detail_level=\"full\" to get its source, documentation, and relationships.\n\
+                                 2. Call `codegraph_callers` with symbol=\"{symbol}\" and max_depth=2 to see what calls it.\n\
+                                 3. Call `codegraph_callees` with symbol=\"{symbol}\" and max_depth=2 to see what it calls.\n\
+                                 4. Call `codegraph_context` with query=\"{symbol}\" to get surrounding context.\n\
+                                 5. Provide a clear explanation of:\n\
+                                    - What the function does (purpose and behavior)\n\
+                                    - Its inputs, outputs, and side effects\n\
+                                    - How it fits in the call graph (who calls it, what it calls)\n\
+                                    - Any noteworthy patterns or potential issues"
+                            ),
+                        ),
+                    ],
+                })
+            }
+            "pre-refactor-check" => {
+                let symbol = args
+                    .get("symbol")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                Ok(GetPromptResult {
+                    description: Some("Pre-refactor impact analysis workflow".into()),
+                    messages: vec![
+                        PromptMessage::new_text(
+                            PromptMessageRole::User,
+                            format!(
+                                "Analyze the impact of refactoring `{symbol}` before making changes. Follow these steps:\n\n\
+                                 1. Call `codegraph_impact` with symbol=\"{symbol}\" to get the blast radius analysis.\n\
+                                 2. Call `codegraph_callers` with symbol=\"{symbol}\" and max_depth=3 to find all transitive callers.\n\
+                                 3. Call `codegraph_dependencies` with symbol=\"{symbol}\" to trace its dependency tree.\n\
+                                 4. Call `codegraph_tests` with symbol=\"{symbol}\" to find existing test coverage.\n\
+                                 5. Summarize:\n\
+                                    - Number of direct and transitive callers affected\n\
+                                    - Files that would need updates\n\
+                                    - Existing test coverage for the symbol\n\
+                                    - Risk assessment (low/medium/high) with rationale\n\
+                                    - Recommended refactoring approach"
+                            ),
+                        ),
+                    ],
+                })
+            }
+            name => Err(McpError::invalid_params(
+                format!("Unknown prompt: {name}"),
+                None,
+            )),
+        };
+
+        std::future::ready(result)
+    }
+
+    fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+        // Get the full tool list from the macro-generated ToolRouter
+        let all_tools = Self::tool_router().list_all();
+
+        // Build the set of enabled tool names from config + registry
+        let enabled = super::registry::enabled_tool_names(&self.config);
+
+        // Filter: keep only tools whose name is in the enabled set
+        let filtered = all_tools
+            .into_iter()
+            .filter(|t| enabled.contains(t.name.as_ref()))
+            .collect();
+
+        std::future::ready(Ok(ListToolsResult {
+            meta: None,
+            next_cursor: None,
+            tools: filtered,
+        }))
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        // Check if the tool is enabled before dispatching
+        let enabled = super::registry::enabled_tool_names(&self.config);
+        if !enabled.contains(request.name.as_ref()) {
+            return Ok(CallToolResult::error(vec![rmcp::model::Content::text(
+                format!(
+                    "Tool '{}' is not available in the current preset ({}). \
+                     Change the preset in .codegraph.yaml or set CODEGRAPH_PRESET=full to enable all tools.",
+                    request.name, self.config.preset
+                ),
+            )]));
+        }
+
+        // Dispatch to the macro-generated tool handler
+        let tool_context =
+            rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        Self::tool_router().call(tool_context).await
     }
 }
 
@@ -2064,7 +1396,9 @@ impl ServerHandler for CodeGraphServer {
 ///
 /// This blocks until the client disconnects or a shutdown signal is received.
 pub async fn run_server(store: GraphStore) -> Result<(), Box<dyn std::error::Error>> {
-    let server = CodeGraphServer::new(store);
+    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let config = crate::config::loader::load_config(None, Some(&project_root)).unwrap_or_default();
+    let server = CodeGraphServer::with_config(store, project_root, config);
     let transport = rmcp::transport::io::stdio();
     let running = server.serve(transport).await.inspect_err(|e| {
         tracing::error!("MCP server error: {}", e);
@@ -2173,7 +1507,13 @@ mod tests {
                 .unwrap();
         }
 
-        let result = server.codegraph_callees("main".to_string(), None).await;
+        let result = server
+            .codegraph_callees(Parameters(SymbolDepthDetailParams {
+                symbol: "main".to_string(),
+                max_depth: None,
+                detail_level: None,
+            }))
+            .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
 
         assert_eq!(json["calleeCount"].as_u64().unwrap(), 2);
@@ -2188,7 +1528,11 @@ mod tests {
     async fn callees_not_found() {
         let server = setup_server();
         let result = server
-            .codegraph_callees("nonexistent".to_string(), None)
+            .codegraph_callees(Parameters(SymbolDepthDetailParams {
+                symbol: "nonexistent".to_string(),
+                max_depth: None,
+                detail_level: None,
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["error"].as_str().unwrap().contains("not found"));
@@ -2213,14 +1557,20 @@ mod tests {
                 .unwrap();
         }
 
-        let result = server.codegraph_node("processData".to_string(), None).await;
+        let result = server
+            .codegraph_node(Parameters(NodeParams {
+                symbol: "processData".to_string(),
+                include_relations: None,
+                detail_level: None,
+            }))
+            .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
 
         assert_eq!(json["name"].as_str().unwrap(), "processData");
         assert_eq!(json["kind"].as_str().unwrap(), "function");
         assert_eq!(json["filePath"].as_str().unwrap(), "src/processor.ts");
         assert_eq!(json["startLine"].as_u64().unwrap(), 10);
-        assert_eq!(json["exported"].as_bool().unwrap(), true);
+        assert!(json["exported"].as_bool().unwrap());
     }
 
     #[tokio::test]
@@ -2244,7 +1594,11 @@ mod tests {
         }
 
         let result = server
-            .codegraph_node("target".to_string(), Some(true))
+            .codegraph_node(Parameters(NodeParams {
+                symbol: "target".to_string(),
+                include_relations: Some(true),
+                detail_level: None,
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
 
@@ -2274,7 +1628,13 @@ mod tests {
                 .unwrap();
         }
 
-        let result = server.codegraph_node("process".to_string(), None).await;
+        let result = server
+            .codegraph_node(Parameters(NodeParams {
+                symbol: "process".to_string(),
+                include_relations: None,
+                detail_level: None,
+            }))
+            .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
 
         assert!(json["error"].as_str().unwrap().contains("not found"));
@@ -2303,7 +1663,12 @@ mod tests {
                 .unwrap();
         }
 
-        let result = server.codegraph_dead_code(None, None).await;
+        let result = server
+            .codegraph_dead_code(Parameters(DeadCodeParams {
+                kinds: None,
+                include_exported: None,
+            }))
+            .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
 
         assert!(json["deadCodeCount"].as_u64().unwrap() >= 2);
@@ -2337,7 +1702,10 @@ mod tests {
         }
 
         let result = server
-            .codegraph_dead_code(Some("function".to_string()), None)
+            .codegraph_dead_code(Parameters(DeadCodeParams {
+                kinds: Some("function".to_string()),
+                include_exported: None,
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
 
@@ -2350,7 +1718,12 @@ mod tests {
     #[tokio::test]
     async fn dead_code_empty_graph() {
         let server = setup_server();
-        let result = server.codegraph_dead_code(None, None).await;
+        let result = server
+            .codegraph_dead_code(Parameters(DeadCodeParams {
+                kinds: None,
+                include_exported: None,
+            }))
+            .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
 
         assert_eq!(json["deadCodeCount"].as_u64().unwrap(), 0);
@@ -2370,7 +1743,9 @@ mod tests {
 
         let server = setup_server();
         let result = server
-            .codegraph_frameworks(Some(dir.path().to_str().unwrap().to_string()))
+            .codegraph_frameworks(Parameters(FrameworksParams {
+                project_dir: Some(dir.path().to_str().unwrap().to_string()),
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
 
@@ -2386,7 +1761,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let server = setup_server();
         let result = server
-            .codegraph_frameworks(Some(dir.path().to_str().unwrap().to_string()))
+            .codegraph_frameworks(Parameters(FrameworksParams {
+                project_dir: Some(dir.path().to_str().unwrap().to_string()),
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
 
@@ -2397,7 +1774,9 @@ mod tests {
     #[tokio::test]
     async fn frameworks_no_dir_with_empty_store() {
         let server = setup_server();
-        let result = server.codegraph_frameworks(None).await;
+        let result = server
+            .codegraph_frameworks(Parameters(FrameworksParams { project_dir: None }))
+            .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
 
         // With no indexed files, defaults to "." which likely has no manifests
@@ -2613,7 +1992,9 @@ mod tests {
     #[tokio::test]
     async fn project_tree_empty() {
         let server = setup_server();
-        let result = server.codegraph_project_tree(None).await;
+        let result = server
+            .codegraph_project_tree(Parameters(MaxDepthParams { max_depth: None }))
+            .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["tree"].is_array() || json["message"].is_string() || json.is_object());
     }
@@ -2631,7 +2012,9 @@ mod tests {
                 ])
                 .unwrap();
         }
-        let result = server.codegraph_project_tree(Some(2)).await;
+        let result = server
+            .codegraph_project_tree(Parameters(MaxDepthParams { max_depth: Some(2) }))
+            .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json.is_object());
     }
@@ -2657,7 +2040,11 @@ mod tests {
                 ])
                 .unwrap();
         }
-        let result = server.codegraph_find_references("helper".to_string()).await;
+        let result = server
+            .codegraph_find_references(Parameters(SymbolParams {
+                symbol: "helper".to_string(),
+            }))
+            .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["referenceCount"].as_u64().unwrap() >= 2);
     }
@@ -2666,7 +2053,9 @@ mod tests {
     async fn find_references_nonexistent_symbol() {
         let server = setup_server();
         let result = server
-            .codegraph_find_references("nonexistent".to_string())
+            .codegraph_find_references(Parameters(SymbolParams {
+                symbol: "nonexistent".to_string(),
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["error"].is_string());
@@ -2743,7 +2132,11 @@ mod tests {
                 .unwrap();
         }
         let result = server
-            .codegraph_find_path("start".to_string(), "end".to_string(), None)
+            .codegraph_find_path(Parameters(FindPathParams {
+                from: "start".to_string(),
+                to: "end".to_string(),
+                max_depth: None,
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["path"].is_array());
@@ -2763,7 +2156,11 @@ mod tests {
                 .unwrap();
         }
         let result = server
-            .codegraph_find_path("isolated_a".to_string(), "isolated_b".to_string(), None)
+            .codegraph_find_path(Parameters(FindPathParams {
+                from: "isolated_a".to_string(),
+                to: "isolated_b".to_string(),
+                max_depth: None,
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["message"].as_str().unwrap().contains("No call path"));
@@ -2785,7 +2182,11 @@ mod tests {
                 [meta.to_string()],
             ).unwrap();
         }
-        let result = server.codegraph_complexity(None).await;
+        let result = server
+            .codegraph_complexity(Parameters(ComplexityParams {
+                min_complexity: None,
+            }))
+            .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["functions"].is_array());
     }
@@ -2793,7 +2194,11 @@ mod tests {
     #[tokio::test]
     async fn complexity_empty_graph() {
         let server = setup_server();
-        let result = server.codegraph_complexity(None).await;
+        let result = server
+            .codegraph_complexity(Parameters(ComplexityParams {
+                min_complexity: None,
+            }))
+            .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json.is_object());
     }
@@ -2804,10 +2209,11 @@ mod tests {
     async fn data_flow_analysis() {
         let server = setup_server();
         let result = server
-            .codegraph_data_flow(
-                "let x = 10;\nlet y = x + 5;".to_string(),
-                "javascript".to_string(),
-            )
+            .codegraph_data_flow(Parameters(DataFlowParams {
+                file_path: None,
+                source: Some("let x = 10;\nlet y = x + 5;".to_string()),
+                language: Some("javascript".to_string()),
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["chains"].is_array());
@@ -2817,10 +2223,28 @@ mod tests {
     async fn data_flow_empty_source() {
         let server = setup_server();
         let result = server
-            .codegraph_data_flow("".to_string(), "javascript".to_string())
+            .codegraph_data_flow(Parameters(DataFlowParams {
+                file_path: None,
+                source: Some("".to_string()),
+                language: Some("javascript".to_string()),
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["chains"].is_array());
+    }
+
+    #[tokio::test]
+    async fn data_flow_missing_params() {
+        let server = setup_server();
+        let result = server
+            .codegraph_data_flow(Parameters(DataFlowParams {
+                file_path: None,
+                source: None,
+                language: None,
+            }))
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["error"].is_string());
     }
 
     // -- codegraph_dead_stores --------------------------------------------
@@ -2829,10 +2253,11 @@ mod tests {
     async fn dead_stores_detection() {
         let server = setup_server();
         let result = server
-            .codegraph_dead_stores(
-                "let x = 10;\nlet y = 20;\nconsole.log(y);".to_string(),
-                "javascript".to_string(),
-            )
+            .codegraph_dead_stores(Parameters(DataFlowParams {
+                file_path: None,
+                source: Some("let x = 10;\nlet y = 20;\nconsole.log(y);".to_string()),
+                language: Some("javascript".to_string()),
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["stores"].is_array());
@@ -2842,19 +2267,48 @@ mod tests {
             .any(|s| s["variable"].as_str().unwrap() == "x"));
     }
 
+    #[tokio::test]
+    async fn dead_stores_missing_params() {
+        let server = setup_server();
+        let result = server
+            .codegraph_dead_stores(Parameters(DataFlowParams {
+                file_path: None,
+                source: None,
+                language: None,
+            }))
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["error"].is_string());
+    }
+
     // -- codegraph_find_uninitialized -------------------------------------
 
     #[tokio::test]
     async fn find_uninitialized_vars() {
         let server = setup_server();
         let result = server
-            .codegraph_find_uninitialized(
-                "console.log(result);\nlet result = compute();".to_string(),
-                "javascript".to_string(),
-            )
+            .codegraph_find_uninitialized(Parameters(DataFlowParams {
+                file_path: None,
+                source: Some("console.log(result);\nlet result = compute();".to_string()),
+                language: Some("javascript".to_string()),
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["locations"].is_array());
+    }
+
+    #[tokio::test]
+    async fn find_uninitialized_missing_params() {
+        let server = setup_server();
+        let result = server
+            .codegraph_find_uninitialized(Parameters(DataFlowParams {
+                file_path: None,
+                source: None,
+                language: None,
+            }))
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["error"].is_string());
     }
 
     // -- codegraph_reaching_defs ------------------------------------------
@@ -2863,14 +2317,30 @@ mod tests {
     async fn reaching_defs_analysis() {
         let server = setup_server();
         let result = server
-            .codegraph_reaching_defs(
-                "let x = 10;\nlet y = 20;\nlet z = x + y;".to_string(),
-                "javascript".to_string(),
-                3,
-            )
+            .codegraph_reaching_defs(Parameters(ReachingDefsParams {
+                file_path: None,
+                source: Some("let x = 10;\nlet y = 20;\nlet z = x + y;".to_string()),
+                language: Some("javascript".to_string()),
+                target_line: 3,
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["reachingDefinitions"].is_array());
+    }
+
+    #[tokio::test]
+    async fn reaching_defs_missing_params() {
+        let server = setup_server();
+        let result = server
+            .codegraph_reaching_defs(Parameters(ReachingDefsParams {
+                file_path: None,
+                source: None,
+                language: None,
+                target_line: 1,
+            }))
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["error"].is_string());
     }
 
     // -- codegraph_query --------------------------------------------------
@@ -2892,7 +2362,11 @@ mod tests {
                 .unwrap();
         }
         let result = server
-            .codegraph_query("searchable".to_string(), Some(5), None)
+            .codegraph_query(Parameters(QueryParams {
+                query: "searchable".to_string(),
+                limit: Some(5),
+                language: None,
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json.is_array());
@@ -2902,7 +2376,11 @@ mod tests {
     async fn query_empty_results() {
         let server = setup_server();
         let result = server
-            .codegraph_query("nonexistent".to_string(), None, None)
+            .codegraph_query(Parameters(QueryParams {
+                query: "nonexistent".to_string(),
+                limit: None,
+                language: None,
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json.is_array());
@@ -2926,7 +2404,11 @@ mod tests {
                 .unwrap();
         }
         let result = server
-            .codegraph_query("compute".to_string(), None, Some("python".to_string()))
+            .codegraph_query(Parameters(QueryParams {
+                query: "compute".to_string(),
+                limit: None,
+                language: Some("python".to_string()),
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json.as_array().unwrap().is_empty(), "no Python nodes exist");
@@ -2950,7 +2432,10 @@ mod tests {
                 .unwrap();
         }
         let result = server
-            .codegraph_dependencies("main".to_string(), None)
+            .codegraph_dependencies(Parameters(SymbolDepthParams {
+                symbol: "main".to_string(),
+                max_depth: None,
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["dependencyCount"].as_u64().unwrap() >= 1);
@@ -2960,7 +2445,10 @@ mod tests {
     async fn dependencies_not_found() {
         let server = setup_server();
         let result = server
-            .codegraph_dependencies("nonexistent".to_string(), None)
+            .codegraph_dependencies(Parameters(SymbolDepthParams {
+                symbol: "nonexistent".to_string(),
+                max_depth: None,
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["error"].is_string());
@@ -2983,7 +2471,13 @@ mod tests {
                 .upsert_edge(&make_edge("n2", "n1", EdgeKind::Calls, "src/main.ts", 5))
                 .unwrap();
         }
-        let result = server.codegraph_callers("helper".to_string(), None).await;
+        let result = server
+            .codegraph_callers(Parameters(SymbolDepthDetailParams {
+                symbol: "helper".to_string(),
+                max_depth: None,
+                detail_level: None,
+            }))
+            .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["callerCount"].as_u64().unwrap() >= 1);
     }
@@ -2992,7 +2486,11 @@ mod tests {
     async fn callers_not_found() {
         let server = setup_server();
         let result = server
-            .codegraph_callers("nonexistent".to_string(), None)
+            .codegraph_callers(Parameters(SymbolDepthDetailParams {
+                symbol: "nonexistent".to_string(),
+                max_depth: None,
+                detail_level: None,
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["error"].is_string());
@@ -3016,7 +2514,10 @@ mod tests {
                 .unwrap();
         }
         let result = server
-            .codegraph_impact(None, Some("core".to_string()))
+            .codegraph_impact(Parameters(ImpactParams {
+                file_path: None,
+                symbol: Some("core".to_string()),
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["totalAffected"].is_number());
@@ -3027,7 +2528,10 @@ mod tests {
     async fn impact_not_found() {
         let server = setup_server();
         let result = server
-            .codegraph_impact(None, Some("nonexistent".to_string()))
+            .codegraph_impact(Parameters(ImpactParams {
+                file_path: None,
+                symbol: Some("nonexistent".to_string()),
+            }))
             .await;
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(json["error"].is_string());
@@ -3051,7 +2555,7 @@ mod tests {
                 ))
                 .unwrap();
         }
-        let node = server.resolve_symbol("myFunc");
+        let node = resolve_symbol(&server.store, "myFunc");
         assert!(node.is_some());
         assert_eq!(node.unwrap().name, "myFunc");
     }
@@ -3072,7 +2576,7 @@ mod tests {
                 ))
                 .unwrap();
         }
-        let node = server.resolve_symbol("n1");
+        let node = resolve_symbol(&server.store, "n1");
         assert!(node.is_some());
         assert_eq!(node.unwrap().id, "n1");
     }
@@ -3080,7 +2584,7 @@ mod tests {
     #[test]
     fn resolve_symbol_not_found() {
         let server = setup_server();
-        let node = server.resolve_symbol("nonexistent");
+        let node = resolve_symbol(&server.store, "nonexistent");
         assert!(node.is_none());
     }
 
@@ -3115,5 +2619,216 @@ mod tests {
         let result = json_text(&val);
         assert!(result.contains("key"));
         assert!(result.contains("value"));
+    }
+
+    #[tokio::test]
+    async fn query_results_include_context_annotation() {
+        let conn = initialize_database(":memory:").expect("schema init");
+        let store = GraphStore::from_connection(conn);
+        let mut config = CodeGraphConfig::default();
+        config
+            .contexts
+            .insert("src/legacy".to_string(), "Deprecated v1 API".to_string());
+        let server = CodeGraphServer::with_config(store, PathBuf::from("."), config);
+        {
+            let s = server.store.lock().unwrap();
+            s.upsert_node(&make_node(
+                "n1",
+                "old_handler",
+                "src/legacy/handler.ts",
+                NodeKind::Function,
+                1,
+                None,
+            ))
+            .unwrap();
+        }
+        let result = server
+            .codegraph_query(Parameters(QueryParams {
+                query: "old_handler".to_string(),
+                limit: Some(5),
+                language: None,
+            }))
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let arr = json.as_array().expect("results should be array");
+        assert!(!arr.is_empty(), "should find old_handler");
+        let first = &arr[0];
+        assert_eq!(
+            first["context"].as_str(),
+            Some("Deprecated v1 API"),
+            "context annotation should be present for legacy path"
+        );
+    }
+
+    #[tokio::test]
+    async fn query_results_no_context_when_path_unmatched() {
+        let conn = initialize_database(":memory:").expect("schema init");
+        let store = GraphStore::from_connection(conn);
+        let mut config = CodeGraphConfig::default();
+        config
+            .contexts
+            .insert("src/legacy".to_string(), "Deprecated v1 API".to_string());
+        let server = CodeGraphServer::with_config(store, PathBuf::from("."), config);
+        {
+            let s = server.store.lock().unwrap();
+            s.upsert_node(&make_node(
+                "n2",
+                "new_handler",
+                "src/api/handler.ts",
+                NodeKind::Function,
+                1,
+                None,
+            ))
+            .unwrap();
+        }
+        let result = server
+            .codegraph_query(Parameters(QueryParams {
+                query: "new_handler".to_string(),
+                limit: Some(5),
+                language: None,
+            }))
+            .await;
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let arr = json.as_array().expect("results should be array");
+        assert!(!arr.is_empty(), "should find new_handler");
+        let first = &arr[0];
+        assert!(
+            first.get("context").is_none(),
+            "no context annotation for non-legacy path"
+        );
+    }
+
+    // =====================================================================
+    // Codex JSON Schema Compatibility Audit
+    // =====================================================================
+
+    fn audit_schema_value(path: &str, value: &serde_json::Value) -> Vec<String> {
+        let mut issues = Vec::new();
+        let Some(obj) = value.as_object() else {
+            return issues;
+        };
+        if obj.contains_key("$ref") {
+            issues.push(format!("{path}: contains $ref reference"));
+        }
+        if let Some(ap) = obj.get("additionalProperties") {
+            if ap.is_object() {
+                issues.push(format!(
+                    "{path}: additionalProperties is an object (must be absent or false)"
+                ));
+            }
+        }
+        for keyword in &["oneOf", "anyOf"] {
+            if let Some(variants) = obj.get(*keyword).and_then(|v| v.as_array()) {
+                let complex = variants
+                    .iter()
+                    .filter(|v| {
+                        v.as_object()
+                            .map(|o| {
+                                o.contains_key("properties")
+                                    || o.contains_key("$ref")
+                                    || o.contains_key("oneOf")
+                                    || o.contains_key("anyOf")
+                            })
+                            .unwrap_or(false)
+                    })
+                    .count();
+                if complex > 0 {
+                    issues.push(format!(
+                        "{path}: {keyword} contains complex object variants"
+                    ));
+                }
+            }
+        }
+        if let Some(props) = obj.get("properties").and_then(|v| v.as_object()) {
+            for (key, prop_value) in props {
+                issues.extend(audit_schema_value(&format!("{path}.{key}"), prop_value));
+            }
+        }
+        if let Some(items) = obj.get("items") {
+            issues.extend(audit_schema_value(&format!("{path}[items]"), items));
+        }
+        issues
+    }
+
+    #[test]
+    fn codex_schema_compatibility_audit() {
+        let tools = CodeGraphServer::tool_router().list_all();
+        assert!(
+            tools.len() >= 46,
+            "Expected >=46 tools, got {}",
+            tools.len()
+        );
+
+        let mut all_issues: Vec<String> = Vec::new();
+        for tool in &tools {
+            let schema = &tool.input_schema;
+            let schema_value = tool.schema_as_json_value();
+            if schema.get("type").and_then(|v| v.as_str()) != Some("object") {
+                all_issues.push(format!("{}: top-level type is not 'object'", tool.name));
+            }
+            if let Some(ap) = schema.get("additionalProperties") {
+                if !ap.is_boolean() || ap.as_bool() == Some(true) {
+                    all_issues.push(format!("{}: additionalProperties is not false", tool.name));
+                }
+            }
+            all_issues.extend(audit_schema_value(&tool.name, &schema_value));
+        }
+
+        if !all_issues.is_empty() {
+            panic!(
+                "Codex schema compatibility issues:\n{}",
+                all_issues.join("\n")
+            );
+        }
+    }
+
+    #[test]
+    fn all_tool_schemas_have_consistent_required_fields() {
+        let tools = CodeGraphServer::tool_router().list_all();
+        for tool in &tools {
+            let schema = &tool.input_schema;
+            if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
+                if let Some(required) = schema.get("required").and_then(|v| v.as_array()) {
+                    for req in required {
+                        let name = req.as_str().unwrap_or("");
+                        assert!(
+                            props.contains_key(name),
+                            "{}: required '{}' not in properties",
+                            tool.name,
+                            name
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tool_schemas_no_definitions_block() {
+        let tools = CodeGraphServer::tool_router().list_all();
+        for tool in &tools {
+            let schema = &tool.input_schema;
+            assert!(
+                !schema.contains_key("definitions"),
+                "{}: contains 'definitions' block",
+                tool.name
+            );
+            assert!(
+                !schema.contains_key("$defs"),
+                "{}: contains '$defs' block",
+                tool.name
+            );
+        }
+    }
+
+    #[test]
+    fn tool_count_is_at_least_46() {
+        let tools = CodeGraphServer::tool_router().list_all();
+        assert!(
+            tools.len() >= 46,
+            "Expected >=46 tools, got {}: {:?}",
+            tools.len(),
+            tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>()
+        );
     }
 }

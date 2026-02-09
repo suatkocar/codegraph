@@ -17,44 +17,37 @@ When Claude Code, Codex, or any MCP-compatible agent enters your project, CodeGr
 
 **v0.2.5** adds git integration, security scanning (OWASP/CWE), call graph analysis, data flow analysis, a YAML configuration system, structured logging, and robust multi-byte character handling.
 
-## Install
+## Getting Started
+
+Two steps. That's it.
+
+### Step 1: Install the binary
+
+Pick one:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/suatkocar/codegraph/main/install.sh | bash
 ```
 
-Or via npm:
+```bash
+brew tap suatkocar/codegraph && brew install codegraph
+```
 
 ```bash
 npx @suatkocar/codegraph init
 ```
 
-Or via Homebrew:
-
-```bash
-brew tap suatkocar/codegraph && brew install codegraph
-```
-
-Or build from source:
-
 ```bash
 cargo build --release --no-default-features
 ```
 
-## Quick Start
+### Step 2: Initialize your project
 
 ```bash
-# One command sets up everything
 codegraph init
 ```
 
-That's it. This single command:
-
-1. **Indexes your codebase** — Parses every source file, extracts symbols and relationships
-2. **Registers the MCP server** — Writes `.mcp.json` so Claude Code auto-discovers it
-3. **Installs lifecycle hooks** — Keeps the graph in sync as you work
-4. **Generates CLAUDE.md** — Teaches the agent to prefer CodeGraph tools over raw search
-5. **Sets up git hooks** — Re-indexes on every commit
+This single command indexes your codebase, registers the MCP server, installs lifecycle hooks, generates CLAUDE.md, and sets up git hooks.
 
 Open Claude Code and your project is already graph-aware.
 

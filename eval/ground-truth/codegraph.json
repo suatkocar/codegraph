@@ -1,0 +1,94 @@
+{
+  "description": "Ground-truth evaluation for CodeGraph v0.3.0 indexed against its own codebase (83 Rust files, 7383 nodes, 11969 edges). Queries target core subsystems with expected symbols from actual search results.",
+  "expected_node_count_min": 5000,
+  "expected_edge_count_min": 8000,
+  "search_queries": [
+    {
+      "query": "hybrid search",
+      "expected_top5_symbols": ["HybridSearch", "fuse_results", "fuse_results_with_expansion", "search", "SearchResult"],
+      "expected_top5_files": ["src/graph/search.rs"]
+    },
+    {
+      "query": "security scan",
+      "expected_top5_symbols": ["codegraph_scan_security", "handle_scan_security", "scan_excludes_test_files"],
+      "expected_top5_files": ["src/mcp/tools_security.rs", "src/mcp/server.rs"]
+    },
+    {
+      "query": "git blame",
+      "expected_top5_symbols": ["git_blame", "handle_blame", "BlameLine"],
+      "expected_top5_files": ["src/git/blame.rs"]
+    },
+    {
+      "query": "context assembly",
+      "expected_top5_symbols": ["ContextAssembler", "assemble_context", "assembler"],
+      "expected_top5_files": ["src/context/assembler.rs", "src/context/mod.rs"]
+    },
+    {
+      "query": "dead code detection",
+      "expected_top5_symbols": ["find_dead_code", "codegraph_dead_code", "dead_code_metrics", "DeadCodeResult"],
+      "expected_top5_files": ["src/resolution/dead_code.rs", "src/eval/harness.rs"]
+    },
+    {
+      "query": "query expansion",
+      "expected_top5_symbols": ["expand_query", "split_identifier", "fuse_results_with_expansion"],
+      "expected_top5_files": ["src/graph/expansion.rs", "src/graph/search.rs"]
+    },
+    {
+      "query": "tree-sitter parse",
+      "expected_top5_symbols": ["parse", "CodeParser", "load_query", "get_ts_language"],
+      "expected_top5_files": ["src/indexer/parser.rs"]
+    },
+    {
+      "query": "import resolution",
+      "expected_top5_symbols": ["resolve_imports", "ImportResolutionResult", "is_relative_import"],
+      "expected_top5_files": ["src/resolution/imports.rs"]
+    },
+    {
+      "query": "data flow analysis",
+      "expected_top5_symbols": ["find_def_use_chains", "find_reaching_defs", "handle_data_flow", "DefUseChain"],
+      "expected_top5_files": ["src/graph/dataflow.rs", "src/mcp/tools_dataflow.rs"]
+    },
+    {
+      "query": "taint analysis",
+      "expected_top5_symbols": ["find_taint_sources", "trace_taint", "TaintSource", "TaintSink", "TaintFlow"],
+      "expected_top5_files": ["src/security/taint.rs"]
+    },
+    {
+      "query": "PageRank ranking",
+      "expected_top5_symbols": ["GraphRanking", "compute_page_rank", "personalized_page_rank", "RankedNode"],
+      "expected_top5_files": ["src/graph/ranking.rs"]
+    },
+    {
+      "query": "fuse results RRF",
+      "expected_top5_symbols": ["fuse_results", "fuse_results_with_expansion", "SearchResult"],
+      "expected_top5_files": ["src/graph/search.rs"]
+    },
+    {
+      "query": "complexity cyclomatic",
+      "expected_top5_symbols": ["calculate_complexity", "handle_complexity"],
+      "expected_top5_files": ["src/graph/complexity.rs", "src/mcp/tools_dataflow.rs"]
+    },
+    {
+      "query": "GraphStore",
+      "expected_top5_symbols": ["GraphStore", "get_node", "get_nodes_by_file", "get_nodes_by_name"],
+      "expected_top5_files": ["src/graph/store.rs"]
+    },
+    {
+      "query": "extract nodes edges",
+      "expected_top5_symbols": ["extract_nodes", "extract_edges", "parse_and_extract_edges"],
+      "expected_top5_files": ["src/indexer/extractor.rs"]
+    }
+  ],
+  "callers": {
+    "fuse_results": ["search", "fuse_results_with_expansion"],
+    "expand_query": ["search", "fuse_results_with_expansion"],
+    "git_blame": ["handle_blame"],
+    "find_dead_code": ["handle_dead_code"],
+    "calculate_complexity": ["handle_complexity"],
+    "evaluate_search": ["run_evaluation"],
+    "evaluate_callers": ["run_evaluation"],
+    "evaluate_dead_code": ["run_evaluation"]
+  },
+  "dead_code": [],
+  "file_dependencies": {}
+}

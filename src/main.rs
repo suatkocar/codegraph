@@ -4,6 +4,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use ignore::WalkBuilder;
 use notify::{RecursiveMode, Watcher};
 
 use codegraph::cli::installer;
@@ -23,6 +24,34 @@ use codegraph::types::Language;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Subcommand)]
+enum WorkspaceAction {
+    /// Initialize a new workspace in the current directory
+    Init,
+    /// Add a repository to the workspace
+    Add {
+        /// Name for the repository
+        name: String,
+        /// Path to the repository
+        path: String,
+    },
+    /// Remove a repository from the workspace
+    Remove {
+        /// Name of the repository to remove
+        name: String,
+    },
+    /// List all repositories in the workspace
+    List,
+    /// Search across all repositories
+    Search {
+        /// Search query
+        query: String,
+        /// Maximum results per repo
+        #[arg(short = 'n', long, default_value_t = 10)]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -67,11 +96,14 @@ enum Commands {
         #[arg(default_value = ".")]
         directory: String,
     },
-    /// Start the CodeGraph MCP server (stdio transport)
+    /// Start the CodeGraph MCP server (stdio transport by default, HTTP with --http)
     Serve {
         /// Database path
         #[arg(long, default_value = ".codegraph/codegraph.db")]
         db: String,
+        /// Start HTTP server on the given address (e.g. 0.0.0.0:8080)
+        #[arg(long)]
+        http: Option<String>,
     },
     /// Show index statistics
     Stats {
@@ -114,6 +146,21 @@ enum Commands {
         /// Project directory
         #[arg(long, default_value = ".")]
         directory: String,
+    },
+    /// Interactive code graph visualization
+    Viz {
+        /// Port to serve on
+        #[arg(long, default_value_t = 3000)]
+        port: u16,
+        /// Database path
+        #[arg(long, default_value = ".codegraph/codegraph.db")]
+        db: String,
+    },
+    /// Multi-repo workspace management
+    Workspace {
+        /// Workspace action
+        #[command(subcommand)]
+        action: WorkspaceAction,
     },
     /// Internal: SessionStart hook handler
     HookSessionStart,
@@ -160,8 +207,8 @@ fn main() {
         Commands::Watch { directory } => {
             cmd_watch(&directory);
         }
-        Commands::Serve { db } => {
-            cmd_serve(&db);
+        Commands::Serve { db, http } => {
+            cmd_serve(&db, http.as_deref());
         }
         Commands::Stats { db } => {
             cmd_stats(&db);
@@ -180,6 +227,37 @@ fn main() {
         }
         Commands::GitHooks { action, directory } => {
             cmd_git_hooks(&action, &directory);
+        }
+        Commands::Viz { port, db } => {
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to build tokio runtime");
+            if let Err(e) = rt.block_on(codegraph::viz::run_viz_server(&db, addr)) {
+                eprintln!("Viz server error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Commands::Workspace { action } => {
+            let dir = std::path::Path::new(".");
+            let result = match action {
+                WorkspaceAction::Init => codegraph::workspace::cmd_workspace_init(dir),
+                WorkspaceAction::Add { name, path } => {
+                    codegraph::workspace::cmd_workspace_add(dir, &name, std::path::Path::new(&path))
+                }
+                WorkspaceAction::Remove { name } => {
+                    codegraph::workspace::cmd_workspace_remove(dir, &name)
+                }
+                WorkspaceAction::List => codegraph::workspace::cmd_workspace_list(dir),
+                WorkspaceAction::Search { query, limit } => {
+                    codegraph::workspace::cmd_workspace_search(dir, &query, limit)
+                }
+            };
+            if let Err(e) = result {
+                eprintln!("Workspace error: {e}");
+                std::process::exit(1);
+            }
         }
         Commands::HookSessionStart => {
             codegraph::hooks::handlers::handle_session_start();
@@ -237,11 +315,36 @@ fn cmd_init(directory: &str, non_interactive: bool) {
     });
     let root_str = root.to_string_lossy().to_string();
 
-    // Step 3: Scan directory to detect languages
-    let file_paths = walkdir::WalkDir::new(&root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
+    // Step 3: Scan directory to detect languages (respecting .gitignore)
+    const ALWAYS_SKIP_DIRS: &[&str] = &[
+        "node_modules",
+        ".git",
+        "vendor",
+        "third_party",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "target",
+        "build",
+        "dist",
+        ".next",
+        ".nuxt",
+        ".output",
+        ".cache",
+    ];
+    let file_paths = WalkBuilder::new(&root)
+        .standard_filters(true) // respects .gitignore, .ignore, hidden files
+        .filter_entry(|entry| {
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                if let Some(name) = entry.file_name().to_str() {
+                    return !ALWAYS_SKIP_DIRS.contains(&name);
+                }
+            }
+            true
+        })
+        .build()
+        .flatten()
+        .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
         .filter_map(|e| {
             let path = e.path().to_string_lossy().to_string();
             CodeParser::detect_language(&path).map(|lang| (lang, path))
@@ -449,7 +552,7 @@ fn cmd_impact(target: &str, db_path: &str) {
     }
 }
 
-fn cmd_serve(db_path: &str) {
+fn cmd_serve(db_path: &str, http_addr: Option<&str>) {
     let db = PathBuf::from(db_path);
     if !db.exists() {
         tracing::error!("database not found at '{}'", db_path);
@@ -459,21 +562,42 @@ fn cmd_serve(db_path: &str) {
 
     let store = open_store(db_path);
 
-    // Build a minimal tokio runtime for the MCP server
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap_or_else(|e| {
-            tracing::error!("cannot create async runtime: {}", e);
-            process::exit(1);
-        });
+    match http_addr {
+        Some(addr) => {
+            // HTTP mode: needs multi-thread runtime for axum
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap_or_else(|e| {
+                    tracing::error!("cannot create async runtime: {}", e);
+                    process::exit(1);
+                });
 
-    rt.block_on(async {
-        if let Err(e) = codegraph::mcp::server::run_server(store).await {
-            tracing::error!("MCP server failed: {}", e);
-            process::exit(1);
+            rt.block_on(async {
+                if let Err(e) = codegraph::mcp::http::run_http_server(store, addr).await {
+                    tracing::error!("HTTP MCP server failed: {}", e);
+                    process::exit(1);
+                }
+            });
         }
-    });
+        None => {
+            // Default: stdio transport
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap_or_else(|e| {
+                    tracing::error!("cannot create async runtime: {}", e);
+                    process::exit(1);
+                });
+
+            rt.block_on(async {
+                if let Err(e) = codegraph::mcp::server::run_server(store).await {
+                    tracing::error!("MCP server failed: {}", e);
+                    process::exit(1);
+                }
+            });
+        }
+    }
 }
 
 fn cmd_dead_code(db_path: &str, kind_filter: Option<&str>) {

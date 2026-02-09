@@ -60,35 +60,40 @@ fn render_section(stats: &ProjectStats) -> String {
 
 This project is indexed by CodeGraph. **Use CodeGraph MCP tools instead of Grep/Glob/Explore agents for code analysis.** The pre-built index provides instant, semantic, relationship-aware results.
 
-### When to Use CodeGraph (Decision Matrix)
+### Tier 1 — Start Here (use first)
 
-| Instead of... | Use this CodeGraph tool | Why |
-|---|---|---|
-| Grep/Glob for function definitions | `codegraph_query` | Semantic search, ranked by relevance |
-| Explore agent for dependency tracing | `codegraph_dependencies` | Instant dependency tree from index |
-| Grep for "who calls X" | `codegraph_callers` | 100% precision, no false positives |
-| Reading files to understand flow | `codegraph_find_path` | Shortest call path between two functions |
-| Manual file reading for context | `codegraph_context` | Token-budgeted, pre-ranked context assembly |
-| Grep for symbol lookup | `codegraph_node` | Direct lookup with relationships + source |
-| Explore agent for project overview | `codegraph_structure` | PageRank-ranked overview, instant |
-| Grep for references | `codegraph_find_references` | Cross-file, all edge types |
-| `git blame` / `git log` in Bash | `codegraph_blame` / `codegraph_file_history` | Structured output, faster |
-| Grep for security patterns | `codegraph_scan_security` | OWASP/CWE rules + taint analysis |
+| Tool | When to Use | Instead of |
+|------|------------|------------|
+| `codegraph_context` | Starting any task — returns relevant code, relationships, and structure | Multiple Read + Grep calls |
 
-### Anti-Patterns (Don't Do This)
+### Tier 2 — Drill Down (after context)
 
+| Tool | When to Use | Instead of |
+|------|------------|------------|
+| `codegraph_callers` | "Who calls this function?" | Grep for function name |
+| `codegraph_callees` | "What does this function call?" | Reading function body manually |
+| `codegraph_node` | Get full source code of a specific symbol | Read tool on the whole file |
+| `codegraph_query` | Search for symbols by name or meaning | Glob + Grep |
+| `codegraph_search` | Quick exact name lookup (<10ms) | Grep for exact function name |
+| `codegraph_dependencies` | "What does this file/module depend on?" | Reading import statements |
+| `codegraph_find_references` | "Where is this used?" (all relationship types) | Project-wide Grep |
+
+### Tier 3 — Specialized (when task requires)
+
+**Deep Search:** `codegraph_deep_query` (cross-encoder re-ranked search for highest precision)
+**Structure & Analysis:** `codegraph_structure` (PageRank overview), `codegraph_impact` (blast radius), `codegraph_stats`, `codegraph_circular_imports`, `codegraph_project_tree`, `codegraph_export_map`, `codegraph_import_graph`, `codegraph_file`, `codegraph_diagram`, `codegraph_dead_code`, `codegraph_tests`, `codegraph_frameworks`, `codegraph_languages`
+**Git:** `codegraph_blame`, `codegraph_file_history`, `codegraph_recent_changes`, `codegraph_commit_diff`, `codegraph_symbol_history`, `codegraph_branch_info`, `codegraph_modified_files`, `codegraph_hotspots`, `codegraph_contributors`
+**Security:** `codegraph_scan_security`, `codegraph_check_owasp`, `codegraph_check_cwe`, `codegraph_explain_vulnerability`, `codegraph_suggest_fix`, `codegraph_find_injections`, `codegraph_taint_sources`, `codegraph_security_summary`, `codegraph_trace_taint`
+**Data Flow:** `codegraph_find_path` (call path between functions), `codegraph_complexity`, `codegraph_data_flow`, `codegraph_dead_stores`, `codegraph_find_uninitialized`, `codegraph_reaching_defs`
+
+### Anti-Patterns — Don't Do This
+
+- **Don't** `grep -r "functionName"` — use `codegraph_callers("functionName")`
+- **Don't** read entire files to find a function — use `codegraph_node("functionName")`
+- **Don't** spawn Explore agents for code structure — use `codegraph_context("your task")`
+- **Don't** manually trace imports — use `codegraph_dependencies("file.ts")`
 - **Don't** launch Explore agents to trace code flow — use `codegraph_dependencies` + `codegraph_callers`
-- **Don't** grep for function names — use `codegraph_query` or `codegraph_node`
-- **Don't** read 10+ files to understand a module — use `codegraph_structure` + `codegraph_context`
 - **Don't** use `git log` via Bash — use `codegraph_file_history` or `codegraph_recent_changes`
-
-### All 44 Tools
-
-**Core (13):** codegraph_query, codegraph_dependencies, codegraph_callers, codegraph_callees, codegraph_impact, codegraph_structure, codegraph_tests, codegraph_context, codegraph_node, codegraph_diagram, codegraph_dead_code, codegraph_frameworks, codegraph_languages
-**Git (9):** codegraph_blame, codegraph_file_history, codegraph_recent_changes, codegraph_commit_diff, codegraph_symbol_history, codegraph_branch_info, codegraph_modified_files, codegraph_hotspots, codegraph_contributors
-**Security (9):** codegraph_scan_security, codegraph_check_owasp, codegraph_check_cwe, codegraph_explain_vulnerability, codegraph_suggest_fix, codegraph_find_injections, codegraph_taint_sources, codegraph_security_summary, codegraph_trace_taint
-**Analysis (7):** codegraph_stats, codegraph_circular_imports, codegraph_project_tree, codegraph_find_references, codegraph_export_map, codegraph_import_graph, codegraph_file
-**Data Flow (6):** codegraph_find_path, codegraph_complexity, codegraph_data_flow, codegraph_dead_stores, codegraph_find_uninitialized, codegraph_reaching_defs
 
 ### Project Stats
 - Languages: {languages}
@@ -307,8 +312,9 @@ mod tests {
     fn render_section_contains_all_tools() {
         let section = render_section(&sample_stats());
         let expected_tools = [
-            // Core (13)
+            // Core (14) + Deep Search (1)
             "codegraph_query",
+            "codegraph_search",
             "codegraph_dependencies",
             "codegraph_callers",
             "codegraph_callees",
@@ -341,6 +347,8 @@ mod tests {
             "codegraph_taint_sources",
             "codegraph_security_summary",
             "codegraph_trace_taint",
+            // Deep Search (1)
+            "codegraph_deep_query",
             // Repo & Analysis (7)
             "codegraph_stats",
             "codegraph_circular_imports",
@@ -357,19 +365,18 @@ mod tests {
             "codegraph_find_uninitialized",
             "codegraph_reaching_defs",
         ];
-        assert_eq!(expected_tools.len(), 44, "should test all 44 tools");
+        assert_eq!(expected_tools.len(), 46, "should test all 46 tools");
         for tool in expected_tools {
             assert!(section.contains(tool), "missing tool: {tool}");
         }
     }
 
     #[test]
-    fn render_section_has_decision_matrix_and_anti_patterns() {
+    fn render_section_has_tiered_tools_and_anti_patterns() {
         let section = render_section(&sample_stats());
-        assert!(
-            section.contains("Decision Matrix"),
-            "should have decision matrix"
-        );
+        assert!(section.contains("Tier 1"), "should have Tier 1 section");
+        assert!(section.contains("Tier 2"), "should have Tier 2 section");
+        assert!(section.contains("Tier 3"), "should have Tier 3 section");
         assert!(
             section.contains("Instead of"),
             "should have 'Instead of' guidance"

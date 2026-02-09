@@ -1,0 +1,12 @@
+target/
+.codegraph/
+.git/
+.github/
+*.md
+eval/
+tests/
+benches/
+docs/
+.vscode/
+.idea/
+*.DS_Store

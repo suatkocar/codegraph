@@ -27,7 +27,9 @@ CREATE TABLE IF NOT EXISTS nodes (
   signature TEXT,
   doc_comment TEXT,
   source_hash TEXT,
-  metadata TEXT
+  metadata TEXT,
+  name_tokens TEXT,
+  is_test INTEGER NOT NULL DEFAULT 0
 )";
 
 const CREATE_EDGES: &str = "\
@@ -74,6 +76,7 @@ const CREATE_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_nodes_file ON nodes(file_path)",
     "CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type)",
     "CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name)",
+    "CREATE INDEX IF NOT EXISTS idx_nodes_is_test ON nodes(is_test) WHERE is_test = 1",
     "CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id)",
     "CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id)",
     "CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type)",
@@ -84,27 +87,27 @@ const CREATE_INDEXES: &[&str] = &[
 
 const CREATE_FTS: &str = "\
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_nodes USING fts5(
-  name, qualified_name, signature, doc_comment, file_path,
+  name, qualified_name, signature, doc_comment, file_path, name_tokens,
   content='nodes', content_rowid='rowid'
 )";
 
 const CREATE_FTS_TRIGGERS: &[&str] = &[
     "\
 CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON nodes BEGIN
-  INSERT INTO fts_nodes(rowid, name, qualified_name, signature, doc_comment, file_path)
-  VALUES (new.rowid, new.name, new.qualified_name, new.signature, new.doc_comment, new.file_path);
+  INSERT INTO fts_nodes(rowid, name, qualified_name, signature, doc_comment, file_path, name_tokens)
+  VALUES (new.rowid, new.name, new.qualified_name, new.signature, new.doc_comment, new.file_path, new.name_tokens);
 END",
     "\
 CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON nodes BEGIN
-  INSERT INTO fts_nodes(fts_nodes, rowid, name, qualified_name, signature, doc_comment, file_path)
-  VALUES ('delete', old.rowid, old.name, old.qualified_name, old.signature, old.doc_comment, old.file_path);
+  INSERT INTO fts_nodes(fts_nodes, rowid, name, qualified_name, signature, doc_comment, file_path, name_tokens)
+  VALUES ('delete', old.rowid, old.name, old.qualified_name, old.signature, old.doc_comment, old.file_path, old.name_tokens);
 END",
     "\
 CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON nodes BEGIN
-  INSERT INTO fts_nodes(fts_nodes, rowid, name, qualified_name, signature, doc_comment, file_path)
-  VALUES ('delete', old.rowid, old.name, old.qualified_name, old.signature, old.doc_comment, old.file_path);
-  INSERT INTO fts_nodes(rowid, name, qualified_name, signature, doc_comment, file_path)
-  VALUES (new.rowid, new.name, new.qualified_name, new.signature, new.doc_comment, new.file_path);
+  INSERT INTO fts_nodes(fts_nodes, rowid, name, qualified_name, signature, doc_comment, file_path, name_tokens)
+  VALUES ('delete', old.rowid, old.name, old.qualified_name, old.signature, old.doc_comment, old.file_path, old.name_tokens);
+  INSERT INTO fts_nodes(rowid, name, qualified_name, signature, doc_comment, file_path, name_tokens)
+  VALUES (new.rowid, new.name, new.qualified_name, new.signature, new.doc_comment, new.file_path, new.name_tokens);
 END",
 ];
 
@@ -186,6 +189,10 @@ pub fn initialize_database(db_path: &str) -> rusqlite::Result<Connection> {
         conn.execute_batch(ddl)?;
     }
 
+    // -- Migrations -------------------------------------------------------
+    migrate_add_name_tokens(&conn)?;
+    migrate_add_is_test(&conn)?;
+
     // -- FTS5 -------------------------------------------------------------
     conn.execute_batch(CREATE_FTS)?;
     for trigger in CREATE_FTS_TRIGGERS {
@@ -196,6 +203,44 @@ pub fn initialize_database(db_path: &str) -> rusqlite::Result<Connection> {
     create_vec_table(&conn);
 
     Ok(conn)
+}
+
+/// Migration: add `name_tokens` column to `nodes` and recreate FTS5.
+///
+/// For databases created before this column existed, we add it via
+/// ALTER TABLE and then rebuild the FTS5 table + triggers to include it.
+fn migrate_add_name_tokens(conn: &Connection) -> rusqlite::Result<()> {
+    // Check if the column already exists
+    let has_column: bool = conn
+        .prepare("SELECT name_tokens FROM nodes LIMIT 0")
+        .is_ok();
+
+    if !has_column {
+        conn.execute_batch("ALTER TABLE nodes ADD COLUMN name_tokens TEXT")?;
+        // Drop old FTS table and triggers so they get recreated with the new column
+        conn.execute_batch("DROP TRIGGER IF EXISTS nodes_ai")?;
+        conn.execute_batch("DROP TRIGGER IF EXISTS nodes_ad")?;
+        conn.execute_batch("DROP TRIGGER IF EXISTS nodes_au")?;
+        conn.execute_batch("DROP TABLE IF EXISTS fts_nodes")?;
+        tracing::info!("Migrated: added name_tokens column to nodes");
+    }
+
+    Ok(())
+}
+
+/// Migration: add `is_test` column to `nodes`.
+///
+/// For databases created before this column existed, we add it via
+/// ALTER TABLE. The DEFAULT 0 ensures backward compatibility.
+fn migrate_add_is_test(conn: &Connection) -> rusqlite::Result<()> {
+    let has_column: bool = conn.prepare("SELECT is_test FROM nodes LIMIT 0").is_ok();
+
+    if !has_column {
+        conn.execute_batch("ALTER TABLE nodes ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0")?;
+        tracing::info!("Migrated: added is_test column to nodes");
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +437,7 @@ mod tests {
             "doc_comment",
             "source_hash",
             "metadata",
+            "is_test",
         ];
         for col in &expected {
             assert!(
@@ -833,5 +879,79 @@ mod tests {
             .unwrap();
         // nodes, edges, file_hashes, embedding_cache, unresolved_refs, fts_nodes, vec_embeddings
         assert!(count >= 7, "Should have at least 7 tables, got {}", count);
+    }
+
+    #[test]
+    fn is_test_column_exists_with_default() {
+        let conn = setup();
+
+        // Insert a node without specifying is_test — should default to 0
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language)
+             VALUES ('n1', 'function', 'hello', 'src/main.ts', 1, 5, 'typescript')",
+            [],
+        )
+        .unwrap();
+
+        let is_test: i32 = conn
+            .query_row("SELECT is_test FROM nodes WHERE id = 'n1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(is_test, 0, "is_test should default to 0");
+    }
+
+    #[test]
+    fn is_test_column_can_be_set() {
+        let conn = setup();
+
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language, is_test)
+             VALUES ('t1', 'function', 'test_login', 'tests/auth.py', 1, 5, 'python', 1)",
+            [],
+        )
+        .unwrap();
+
+        let is_test: i32 = conn
+            .query_row("SELECT is_test FROM nodes WHERE id = 't1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(is_test, 1, "is_test should be 1 for test node");
+    }
+
+    #[test]
+    fn is_test_index_exists() {
+        let conn = setup();
+        assert!(
+            object_exists(&conn, "index", "idx_nodes_is_test"),
+            "partial index on is_test should exist"
+        );
+    }
+
+    #[test]
+    fn query_is_test_filtered() {
+        let conn = setup();
+
+        // Insert test and non-test nodes
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language, is_test)
+             VALUES ('t1', 'function', 'test_add', 'tests/math.py', 1, 5, 'python', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO nodes (id, type, name, file_path, start_line, end_line, language, is_test)
+             VALUES ('r1', 'function', 'add', 'src/math.py', 1, 5, 'python', 0)",
+            [],
+        )
+        .unwrap();
+
+        let test_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM nodes WHERE is_test = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(test_count, 1, "should find exactly 1 test node");
     }
 }

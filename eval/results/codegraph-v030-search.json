@@ -1,0 +1,11 @@
+{
+  "database": ".codegraph/codegraph.db",
+  "queries": 15,
+  "search_metrics": {
+    "avg_precision": "0.233",
+    "avg_recall": "0.463",
+    "mrr": "0.631"
+  },
+  "timestamp": "2026-02-08T13:30:18.781352+00:00",
+  "version": "0.3.0"
+}

@@ -1,6 +1,6 @@
 //! Hook installation — writes shell scripts and config files for Claude Code integration.
 //!
-//! The [`install_hooks`] function performs three non-destructive operations:
+//! The [`install_hooks`] function performs seven non-destructive operations:
 //!
 //! 1. **Shell scripts** — Writes ten executable bash scripts into `.claude/hooks/`
 //!    that delegate to `codegraph hook-*` subcommands.
@@ -8,11 +8,21 @@
 //!    Claude Code invokes the scripts at the right lifecycle points.
 //! 3. **`.mcp.json`** — Merges the CodeGraph MCP server entry so Claude Code
 //!    can discover and launch it automatically.
+//! 4. **Global `CLAUDE.md`** — Writes a CodeGraph discovery section to
+//!    `~/.claude/CLAUDE.md` so every session knows CodeGraph exists.
+//! 5. **Auto-allow permissions** — Adds `mcp__codegraph__*` entries to the
+//!    user's global `~/.claude/settings.json` → `permissions.allow` so that
+//!    MCP tool calls do not require manual approval each time.
+//! 6. **Codex `config.toml`** — If `~/.codex/` exists, merges a
+//!    `[mcp_servers.codegraph]` entry into `~/.codex/config.toml`.
+//! 7. **`AGENTS.md`** — Generates an `AGENTS.md` alongside `CLAUDE.md` for
+//!    Codex compatibility (Codex reads `AGENTS.md`, not `CLAUDE.md`).
 //!
-//! All JSON merges are additive: existing keys outside the CodeGraph namespace
-//! are preserved verbatim.
+//! All JSON/TOML merges are additive: existing keys outside the CodeGraph
+//! namespace are preserved verbatim.
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
@@ -44,6 +54,36 @@ pub fn install_hooks(project_dir: &Path, binary_path: &str) -> Result<()> {
 
     // 3. Merge MCP server entry into .mcp.json
     merge_mcp_config(&mcp_path, binary_path)?;
+
+    // 4. Write global ~/.claude/CLAUDE.md discovery section
+    if let Err(e) = write_global_claude_md() {
+        tracing::warn!("Could not update global CLAUDE.md: {}", e);
+        // Non-fatal: project-local install still succeeds
+    }
+
+    // 5. Add auto-allow permissions for all MCP tools to global settings
+    if let Err(e) = merge_auto_allow_permissions_global() {
+        tracing::warn!("Could not update global auto-allow permissions: {}", e);
+        // Non-fatal: tools will work but require manual approval
+    }
+
+    // 6. Merge Codex config.toml (if ~/.codex/ exists)
+    if let Err(e) = crate::hooks::codex_config::merge_codex_config(binary_path) {
+        tracing::warn!("Could not update Codex config.toml: {}", e);
+        // Non-fatal: Codex may not be installed
+    }
+
+    // 7. Generate AGENTS.md for Codex compatibility
+    //    (actual stats will be populated by the caller after indexing;
+    //    here we create a placeholder with zeros that gets updated later)
+    let placeholder_stats = crate::hooks::claude_template::ProjectStats::default();
+    if let Err(e) = crate::hooks::codex_config::generate_agents_md(
+        &project_dir.to_string_lossy(),
+        &placeholder_stats,
+    ) {
+        tracing::warn!("Could not generate AGENTS.md: {}", e);
+        // Non-fatal: AGENTS.md is only needed for Codex
+    }
 
     tracing::info!("Hooks installed successfully.");
     Ok(())
@@ -136,6 +176,7 @@ fn write_shell_scripts(hooks_dir: &Path, binary_path: &str) -> Result<()> {
         let path = hooks_dir.join(hook.filename);
         let body = render_script(hook, binary_path);
         fs::write(&path, body)?;
+        #[cfg(unix)]
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
         tracing::info!("Wrote {}", path.display());
     }
@@ -281,8 +322,238 @@ fn merge_mcp_config(mcp_path: &Path, binary_path: &str) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Global ~/.claude/CLAUDE.md discovery
+// ---------------------------------------------------------------------------
+
+const GLOBAL_MARKER_START: &str = "<!-- CODEGRAPH_START -->";
+const GLOBAL_MARKER_END: &str = "<!-- CODEGRAPH_END -->";
+
+const GLOBAL_SECTION: &str = "\
+<!-- CODEGRAPH_START -->
+## CodeGraph \u{2014} Codebase Intelligence
+
+CodeGraph is installed. When a `.codegraph/` directory exists in a project, use CodeGraph MCP tools for faster code exploration:
+
+- **Start here:** `codegraph_context` \u{2014} describe your task, get everything you need in one call
+- **Drill down:** `codegraph_callers`, `codegraph_node`, `codegraph_query` \u{2014} specific lookups
+- **Instead of grep/glob:** CodeGraph tools are 10x faster for finding symbols, callers, and dependencies
+
+If `.codegraph/` does NOT exist, suggest: \"Run `codegraph init` to enable code intelligence for this project.\"
+<!-- CODEGRAPH_END -->";
+
+/// Write a minimal CodeGraph discovery section to `~/.claude/CLAUDE.md`.
+///
+/// This ensures every Claude Code session knows CodeGraph exists, even in
+/// projects that haven't run `codegraph init` yet. The section uses HTML
+/// comment markers for idempotent updates:
+///
+/// - If markers exist, the content between them is replaced.
+/// - If the file exists but has no markers, the section is appended.
+/// - If the file doesn't exist, it is created with just the section.
+pub fn write_global_claude_md() -> Result<()> {
+    let home = home_dir()?;
+    let claude_dir = home.join(".claude");
+    let claude_md = claude_dir.join("CLAUDE.md");
+
+    write_global_claude_md_to(&claude_md)
+}
+
+/// Inner implementation that accepts an explicit path (for testing).
+fn write_global_claude_md_to(claude_md: &Path) -> Result<()> {
+    // Ensure parent directory exists
+    if let Some(parent) = claude_md.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let content = match fs::read_to_string(claude_md) {
+        Ok(existing) if !existing.is_empty() => {
+            if let Some(start) = existing.find(GLOBAL_MARKER_START) {
+                // Replace between markers (inclusive)
+                let end = existing[start..]
+                    .find(GLOBAL_MARKER_END)
+                    .map(|pos| start + pos + GLOBAL_MARKER_END.len())
+                    .unwrap_or(existing.len());
+
+                let mut result = String::with_capacity(existing.len());
+                result.push_str(&existing[..start]);
+                result.push_str(GLOBAL_SECTION);
+                result.push_str(&existing[end..]);
+                result
+            } else {
+                // Append
+                format!("{}\n\n{}\n", existing.trim_end(), GLOBAL_SECTION)
+            }
+        }
+        _ => {
+            // Create new
+            format!("{}\n", GLOBAL_SECTION)
+        }
+    };
+
+    fs::write(claude_md, content)?;
+    tracing::info!("Updated global CLAUDE.md at {}", claude_md.display());
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Auto-allow permissions
+// ---------------------------------------------------------------------------
+
+use std::path::PathBuf;
+
+/// All 46 MCP tool names exposed by the CodeGraph server.
+///
+/// These correspond to the `async fn codegraph_*` methods in `src/mcp/server.rs`.
+/// The permission string format is `mcp__codegraph__<tool_name>`.
+const CODEGRAPH_TOOL_NAMES: &[&str] = &[
+    // Core (14) + Deep Search (1)
+    "codegraph_query",
+    "codegraph_search",
+    "codegraph_deep_query",
+    "codegraph_dependencies",
+    "codegraph_callers",
+    "codegraph_callees",
+    "codegraph_impact",
+    "codegraph_structure",
+    "codegraph_tests",
+    "codegraph_context",
+    "codegraph_diagram",
+    "codegraph_node",
+    "codegraph_dead_code",
+    "codegraph_frameworks",
+    "codegraph_languages",
+    // Git (9)
+    "codegraph_blame",
+    "codegraph_file_history",
+    "codegraph_recent_changes",
+    "codegraph_commit_diff",
+    "codegraph_symbol_history",
+    "codegraph_branch_info",
+    "codegraph_modified_files",
+    "codegraph_hotspots",
+    "codegraph_contributors",
+    // Security (9)
+    "codegraph_scan_security",
+    "codegraph_check_owasp",
+    "codegraph_check_cwe",
+    "codegraph_explain_vulnerability",
+    "codegraph_suggest_fix",
+    "codegraph_find_injections",
+    "codegraph_taint_sources",
+    "codegraph_security_summary",
+    "codegraph_trace_taint",
+    // Repository & Analysis (7)
+    "codegraph_stats",
+    "codegraph_circular_imports",
+    "codegraph_project_tree",
+    "codegraph_find_references",
+    "codegraph_export_map",
+    "codegraph_import_graph",
+    "codegraph_file",
+    // Call Graph & Data Flow (6)
+    "codegraph_find_path",
+    "codegraph_complexity",
+    "codegraph_data_flow",
+    "codegraph_dead_stores",
+    "codegraph_find_uninitialized",
+    "codegraph_reaching_defs",
+];
+
+/// Entry point that resolves `~/.claude/settings.json` and delegates.
+fn merge_auto_allow_permissions_global() -> Result<()> {
+    let home = home_dir()?;
+    let global_settings = home.join(".claude").join("settings.json");
+    merge_auto_allow_permissions(&global_settings)
+}
+
+/// Add `mcp__codegraph__*` permission entries to `permissions.allow` in
+/// the given settings file.
+///
+/// - Creates the file (and parent dirs) if it doesn't exist.
+/// - Creates `permissions` and `allow` keys if they don't exist.
+/// - Skips entries that are already present (idempotent).
+/// - Preserves all existing content.
+fn merge_auto_allow_permissions(settings_path: &Path) -> Result<()> {
+    let mut root = read_json_or_empty_object(settings_path)?;
+
+    // Navigate to permissions.allow, creating the path if needed
+    let permissions = root
+        .as_object_mut()
+        .expect("root is always an object")
+        .entry("permissions")
+        .or_insert_with(|| json!({}));
+
+    // Ensure permissions is an object
+    if !permissions.is_object() {
+        *permissions = json!({});
+    }
+
+    let allow = permissions
+        .as_object_mut()
+        .unwrap()
+        .entry("allow")
+        .or_insert_with(|| json!([]));
+
+    // Ensure allow is an array
+    if !allow.is_array() {
+        *allow = json!([]);
+    }
+
+    let allow_arr = allow.as_array_mut().unwrap();
+
+    // Build a set of existing entries for O(n) dedup
+    let existing: std::collections::HashSet<String> = allow_arr
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+
+    // Add missing permission entries
+    let mut added = 0usize;
+    for tool_name in CODEGRAPH_TOOL_NAMES {
+        let perm = format!("mcp__codegraph__{}", tool_name);
+        if !existing.contains(&perm) {
+            allow_arr.push(Value::String(perm));
+            added += 1;
+        }
+    }
+
+    if added > 0 {
+        // Ensure parent directory exists
+        if let Some(parent) = settings_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let pretty = serde_json::to_string_pretty(&root)?;
+        fs::write(settings_path, pretty)?;
+        tracing::info!(
+            "Added {} auto-allow permissions to {}",
+            added,
+            settings_path.display()
+        );
+    } else {
+        tracing::info!(
+            "All auto-allow permissions already present in {}",
+            settings_path.display()
+        );
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Cross-platform home directory resolution.
+///
+/// Uses the `directories` crate which handles `$HOME` on Unix and
+/// `%USERPROFILE%` on Windows.
+fn home_dir() -> Result<PathBuf> {
+    directories::BaseDirs::new()
+        .map(|dirs| dirs.home_dir().to_path_buf())
+        .ok_or_else(|| {
+            crate::error::CodeGraphError::Other("cannot determine home directory".into())
+        })
+}
 
 /// Read a JSON file and parse it as `Value`, returning an empty object if
 /// the file doesn't exist or is empty.
@@ -345,13 +616,16 @@ mod tests {
             assert!(content.contains(hook.subcommand));
             assert!(content.contains("codegraph"));
 
-            let mode = fs::metadata(&path).unwrap().permissions().mode();
-            assert_eq!(
-                mode & 0o777,
-                0o755,
-                "wrong permissions on {}",
-                hook.filename
-            );
+            #[cfg(unix)]
+            {
+                let mode = fs::metadata(&path).unwrap().permissions().mode();
+                assert_eq!(
+                    mode & 0o777,
+                    0o755,
+                    "wrong permissions on {}",
+                    hook.filename
+                );
+            }
         }
     }
 
@@ -798,6 +1072,281 @@ mod tests {
                 hook.subcommand.starts_with("hook-"),
                 "Subcommand '{}' should start with 'hook-'",
                 hook.subcommand
+            );
+        }
+    }
+
+    // -- Global CLAUDE.md tests -----------------------------------------------
+
+    #[test]
+    fn global_claude_md_creates_new_file() {
+        let tmp = TempDir::new().unwrap();
+        let claude_md = tmp.path().join(".claude").join("CLAUDE.md");
+
+        write_global_claude_md_to(&claude_md).unwrap();
+
+        let content = fs::read_to_string(&claude_md).unwrap();
+        assert!(content.contains(GLOBAL_MARKER_START));
+        assert!(content.contains(GLOBAL_MARKER_END));
+        assert!(content.contains("codegraph_context"));
+        assert!(content.contains("codegraph_callers"));
+        assert!(content.contains("codegraph init"));
+    }
+
+    #[test]
+    fn global_claude_md_appends_to_existing_without_markers() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        let claude_md = claude_dir.join("CLAUDE.md");
+
+        let existing = "# My Global Instructions\n\nDo something important.\n";
+        fs::write(&claude_md, existing).unwrap();
+
+        write_global_claude_md_to(&claude_md).unwrap();
+
+        let content = fs::read_to_string(&claude_md).unwrap();
+        assert!(
+            content.contains("# My Global Instructions"),
+            "original content preserved"
+        );
+        assert!(
+            content.contains("Do something important."),
+            "original body preserved"
+        );
+        assert!(content.contains(GLOBAL_MARKER_START), "markers added");
+        assert!(content.contains("codegraph_context"), "section appended");
+    }
+
+    #[test]
+    fn global_claude_md_replaces_between_markers() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        let claude_md = claude_dir.join("CLAUDE.md");
+
+        let existing = format!(
+            "# Header\n\n{}\nOld CodeGraph content\n{}\n\n## Other Section\nKeep this.\n",
+            GLOBAL_MARKER_START, GLOBAL_MARKER_END,
+        );
+        fs::write(&claude_md, &existing).unwrap();
+
+        write_global_claude_md_to(&claude_md).unwrap();
+
+        let content = fs::read_to_string(&claude_md).unwrap();
+        assert!(content.contains("# Header"), "header preserved");
+        assert!(
+            content.contains("## Other Section"),
+            "other section preserved"
+        );
+        assert!(content.contains("Keep this."), "other content preserved");
+        assert!(
+            !content.contains("Old CodeGraph content"),
+            "old content replaced"
+        );
+        assert!(
+            content.contains("codegraph_context"),
+            "new content injected"
+        );
+    }
+
+    #[test]
+    fn global_claude_md_is_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let claude_md = tmp.path().join(".claude").join("CLAUDE.md");
+
+        write_global_claude_md_to(&claude_md).unwrap();
+        let first = fs::read_to_string(&claude_md).unwrap();
+
+        write_global_claude_md_to(&claude_md).unwrap();
+        let second = fs::read_to_string(&claude_md).unwrap();
+
+        assert_eq!(
+            first, second,
+            "running twice should produce identical output"
+        );
+    }
+
+    #[test]
+    fn global_claude_md_marker_appears_once_after_multiple_runs() {
+        let tmp = TempDir::new().unwrap();
+        let claude_md = tmp.path().join(".claude").join("CLAUDE.md");
+
+        write_global_claude_md_to(&claude_md).unwrap();
+        write_global_claude_md_to(&claude_md).unwrap();
+        write_global_claude_md_to(&claude_md).unwrap();
+
+        let content = fs::read_to_string(&claude_md).unwrap();
+        let start_count = content.matches(GLOBAL_MARKER_START).count();
+        let end_count = content.matches(GLOBAL_MARKER_END).count();
+        assert_eq!(start_count, 1, "start marker should appear exactly once");
+        assert_eq!(end_count, 1, "end marker should appear exactly once");
+    }
+
+    #[test]
+    fn global_section_contains_required_content() {
+        assert!(GLOBAL_SECTION.contains(GLOBAL_MARKER_START));
+        assert!(GLOBAL_SECTION.contains(GLOBAL_MARKER_END));
+        assert!(GLOBAL_SECTION.contains("codegraph_context"));
+        assert!(GLOBAL_SECTION.contains("codegraph_callers"));
+        assert!(GLOBAL_SECTION.contains("codegraph_node"));
+        assert!(GLOBAL_SECTION.contains("codegraph_query"));
+        assert!(GLOBAL_SECTION.contains("codegraph init"));
+        assert!(GLOBAL_SECTION.contains(".codegraph/"));
+    }
+
+    // -- Auto-allow permissions tests -----------------------------------------
+
+    #[test]
+    fn tool_names_count_is_46() {
+        assert_eq!(
+            CODEGRAPH_TOOL_NAMES.len(),
+            46,
+            "Should have exactly 46 MCP tool names"
+        );
+    }
+
+    #[test]
+    fn tool_names_are_unique() {
+        let unique: std::collections::HashSet<&str> =
+            CODEGRAPH_TOOL_NAMES.iter().copied().collect();
+        assert_eq!(
+            CODEGRAPH_TOOL_NAMES.len(),
+            unique.len(),
+            "All tool names should be unique"
+        );
+    }
+
+    #[test]
+    fn auto_allow_creates_from_scratch() {
+        let tmp = TempDir::new().unwrap();
+        let settings = tmp.path().join(".claude").join("settings.json");
+
+        merge_auto_allow_permissions(&settings).unwrap();
+
+        let parsed: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+        let allow = parsed["permissions"]["allow"].as_array().unwrap();
+        assert_eq!(allow.len(), 46, "should have 46 permission entries");
+        assert!(
+            allow.contains(&json!("mcp__codegraph__codegraph_query")),
+            "should contain codegraph_query permission"
+        );
+        assert!(
+            allow.contains(&json!("mcp__codegraph__codegraph_reaching_defs")),
+            "should contain codegraph_reaching_defs permission"
+        );
+    }
+
+    #[test]
+    fn auto_allow_preserves_existing_permissions() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+
+        let settings = claude_dir.join("settings.json");
+        fs::write(
+            &settings,
+            serde_json::to_string_pretty(&json!({
+                "theme": "dark",
+                "permissions": {
+                    "allow": ["mcp__other_server__tool1", "Bash(*)"],
+                    "deny": ["mcp__bad__tool"]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        merge_auto_allow_permissions(&settings).unwrap();
+
+        let parsed: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+
+        // Existing entries preserved
+        assert_eq!(parsed["theme"], json!("dark"));
+        let deny = &parsed["permissions"]["deny"];
+        assert!(deny.is_array(), "deny array preserved");
+        assert!(deny.as_array().unwrap().contains(&json!("mcp__bad__tool")));
+
+        let allow = parsed["permissions"]["allow"].as_array().unwrap();
+        assert!(
+            allow.contains(&json!("mcp__other_server__tool1")),
+            "existing allow entry preserved"
+        );
+        assert!(
+            allow.contains(&json!("Bash(*)")),
+            "existing Bash permission preserved"
+        );
+        // 2 existing + 46 new = 48
+        assert_eq!(allow.len(), 48, "should have 2 existing + 46 new");
+    }
+
+    #[test]
+    fn auto_allow_is_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let settings = tmp.path().join(".claude").join("settings.json");
+
+        merge_auto_allow_permissions(&settings).unwrap();
+        merge_auto_allow_permissions(&settings).unwrap();
+
+        let parsed: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+        let allow = parsed["permissions"]["allow"].as_array().unwrap();
+        assert_eq!(
+            allow.len(),
+            46,
+            "running twice should not duplicate entries"
+        );
+    }
+
+    #[test]
+    fn auto_allow_handles_empty_file() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        let settings = claude_dir.join("settings.json");
+        fs::write(&settings, "").unwrap();
+
+        merge_auto_allow_permissions(&settings).unwrap();
+
+        let parsed: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(parsed["permissions"]["allow"].as_array().unwrap().len(), 46);
+    }
+
+    #[test]
+    fn auto_allow_handles_permissions_not_object() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        let settings = claude_dir.join("settings.json");
+        fs::write(&settings, r#"{"permissions": "invalid"}"#).unwrap();
+
+        merge_auto_allow_permissions(&settings).unwrap();
+
+        let parsed: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(parsed["permissions"]["allow"].as_array().unwrap().len(), 46);
+    }
+
+    #[test]
+    fn auto_allow_handles_allow_not_array() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        let settings = claude_dir.join("settings.json");
+        fs::write(&settings, r#"{"permissions": {"allow": "invalid"}}"#).unwrap();
+
+        merge_auto_allow_permissions(&settings).unwrap();
+
+        let parsed: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(parsed["permissions"]["allow"].as_array().unwrap().len(), 46);
+    }
+
+    #[test]
+    fn auto_allow_permission_format() {
+        for tool_name in CODEGRAPH_TOOL_NAMES {
+            let perm = format!("mcp__codegraph__{}", tool_name);
+            assert!(
+                perm.starts_with("mcp__codegraph__codegraph_"),
+                "permission '{}' should match expected format",
+                perm
             );
         }
     }

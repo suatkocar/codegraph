@@ -49,8 +49,8 @@ impl std::fmt::Debug for GraphStore {
 // ---------------------------------------------------------------------------
 
 const UPSERT_NODE_SQL: &str = "\
-INSERT INTO nodes (id, type, name, qualified_name, file_path, start_line, end_line, language, signature, doc_comment, source_hash, metadata)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+INSERT INTO nodes (id, type, name, qualified_name, file_path, start_line, end_line, language, signature, doc_comment, source_hash, metadata, name_tokens, is_test)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
 ON CONFLICT(id) DO UPDATE SET
   type = excluded.type,
   name = excluded.name,
@@ -62,7 +62,9 @@ ON CONFLICT(id) DO UPDATE SET
   signature = excluded.signature,
   doc_comment = excluded.doc_comment,
   source_hash = excluded.source_hash,
-  metadata = excluded.metadata";
+  metadata = excluded.metadata,
+  name_tokens = excluded.name_tokens,
+  is_test = excluded.is_test";
 
 const UPSERT_EDGE_SQL: &str = "\
 INSERT INTO edges (source_id, target_id, type, properties)
@@ -116,6 +118,112 @@ fn i32_to_base36(mut n: u32) -> String {
     String::from_utf8(buf).unwrap()
 }
 
+/// Detect whether a node is a test function based on language-specific heuristics.
+///
+/// # Language rules
+/// - **Rust**: name starts with `test_`, or file path contains `/tests/` or `_test.rs`
+/// - **Python**: name starts with `test_`, or name starts with `Test` (class)
+/// - **JavaScript/TypeScript**: name is `describe`/`it`/`test`, or file matches `*.test.*`/`*.spec.*`
+/// - **Go**: name starts with `Test` or `Benchmark`, or file ends with `_test.go`
+/// - **Java/Kotlin**: name starts with `test` (JUnit), or file contains `Test` in name
+/// - **General fallback**: name contains "test" AND file_path contains "test" or "spec"
+pub fn detect_is_test(name: &str, file_path: &str, language: &str, kind: &str) -> bool {
+    let name_lower = name.to_lowercase();
+    let path_lower = file_path.to_lowercase();
+
+    match language {
+        "rust" => {
+            // #[test] functions typically named test_* or inside mod tests
+            name_lower.starts_with("test_")
+                || name == "test"
+                || path_lower.contains("/tests/")
+                || path_lower.ends_with("_test.rs")
+                || (path_lower.contains("test") && name_lower.contains("test"))
+        }
+        "python" => {
+            // pytest: test_* functions, Test* classes
+            name_lower.starts_with("test_")
+                || name.starts_with("Test")
+                || path_lower.contains("/tests/")
+                || path_lower.contains("/test_")
+                || path_lower.ends_with("_test.py")
+        }
+        "typescript" | "tsx" | "javascript" | "jsx" => {
+            // Jest/Mocha/Vitest: describe/it/test, or *.test.*/*.spec.* files
+            let is_test_fn = matches!(
+                name_lower.as_str(),
+                "describe" | "it" | "test" | "xit" | "xdescribe"
+            );
+            let is_test_file = path_lower.contains(".test.")
+                || path_lower.contains(".spec.")
+                || path_lower.contains("__tests__");
+            let name_is_testy = name_lower.starts_with("test")
+                || name_lower.ends_with("test")
+                || name_lower.starts_with("spec");
+
+            is_test_fn
+                || (is_test_file && (kind == "function" || kind == "method" || kind == "variable"))
+                || (is_test_file && name_is_testy)
+        }
+        "go" => {
+            // Go: Test*/Benchmark*/Example* functions, *_test.go files
+            name.starts_with("Test")
+                || name.starts_with("Benchmark")
+                || name.starts_with("Example")
+                || path_lower.ends_with("_test.go")
+        }
+        "java" | "kotlin" | "scala" | "groovy" => {
+            // JUnit: @Test annotated, test* methods, *Test classes
+            name_lower.starts_with("test")
+                || name.ends_with("Test")
+                || name.ends_with("Tests")
+                || name.ends_with("Spec")
+                || path_lower.contains("/test/")
+                || path_lower.contains("test.java")
+                || path_lower.contains("test.kt")
+        }
+        "ruby" => {
+            // RSpec/Minitest
+            name_lower.starts_with("test_")
+                || path_lower.contains("_test.rb")
+                || path_lower.contains("_spec.rb")
+                || path_lower.contains("/spec/")
+                || path_lower.contains("/test/")
+        }
+        "elixir" => {
+            name_lower.starts_with("test ")
+                || name_lower.starts_with("test_")
+                || path_lower.ends_with("_test.exs")
+                || path_lower.contains("/test/")
+        }
+        "csharp" => {
+            name_lower.starts_with("test")
+                || name.ends_with("Test")
+                || name.ends_with("Tests")
+                || path_lower.contains("/tests/")
+                || path_lower.contains("test.cs")
+        }
+        "swift" => {
+            name_lower.starts_with("test")
+                || name.ends_with("Tests")
+                || path_lower.contains("tests/")
+                || path_lower.contains("test.swift")
+        }
+        "php" => {
+            name_lower.starts_with("test")
+                || name.ends_with("Test")
+                || path_lower.contains("/tests/")
+                || path_lower.contains("test.php")
+        }
+        _ => {
+            // General fallback: name contains "test" AND file path contains "test" or "spec"
+            let name_has_test = name_lower.contains("test");
+            let path_has_test = path_lower.contains("test") || path_lower.contains("spec");
+            name_has_test && path_has_test
+        }
+    }
+}
+
 /// Build the metadata JSON object that the TS version stores alongside
 /// each node row.
 fn build_node_metadata(node: &CodeNode) -> String {
@@ -163,6 +271,96 @@ fn build_edge_properties(edge: &CodeEdge) -> String {
     serde_json::Value::Object(map).to_string()
 }
 
+/// Split an identifier into its constituent words for FTS5 tokenization.
+///
+/// Handles camelCase, PascalCase, snake_case, SCREAMING_SNAKE_CASE, and
+/// mixed patterns. Returns the original identifier plus all split words,
+/// lowercased, joined by spaces.
+///
+/// # Examples
+///
+/// ```ignore
+/// assert_eq!(split_identifier("getUserById"), "getUserById get user by id");
+/// assert_eq!(split_identifier("PaymentService"), "PaymentService payment service");
+/// assert_eq!(split_identifier("process_user_input"), "process_user_input process user input");
+/// assert_eq!(split_identifier("MAX_RETRY_COUNT"), "MAX_RETRY_COUNT max retry count");
+/// ```
+pub fn split_identifier(name: &str) -> String {
+    let words = split_identifier_words(name);
+    if words.len() <= 1 {
+        // Single word or empty — no splitting needed, original is sufficient
+        return name.to_string();
+    }
+
+    let lowered: Vec<String> = words.iter().map(|w| w.to_lowercase()).collect();
+    format!("{} {}", name, lowered.join(" "))
+}
+
+/// Build the name_tokens value for FTS5, combining name and qualified_name.
+///
+/// Both are split into words and concatenated so that searching for any
+/// component word matches the node.
+fn build_name_tokens(name: &str, qualified_name: Option<&str>) -> String {
+    let name_expanded = split_identifier(name);
+
+    match qualified_name {
+        Some(qn) if qn != name => {
+            // Split each segment of the qualified name (e.g. "UserService.findUser")
+            let qn_parts: Vec<String> = qn.split('.').map(split_identifier).collect();
+            format!("{} {}", name_expanded, qn_parts.join(" "))
+        }
+        _ => name_expanded,
+    }
+}
+
+/// Extract individual words from an identifier.
+///
+/// Splits on:
+/// - Underscores: `foo_bar` → ["foo", "bar"]
+/// - camelCase boundaries: `fooBar` → ["foo", "Bar"]
+/// - PascalCase → consecutive uppercase: `XMLParser` → ["XML", "Parser"]
+fn split_identifier_words(name: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+
+    let chars: Vec<char> = name.chars().collect();
+    let len = chars.len();
+
+    for i in 0..len {
+        let ch = chars[i];
+
+        if ch == '_' || ch == '-' || ch == '.' {
+            // Separator — flush current word
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+
+        if ch.is_uppercase() {
+            if !current.is_empty() {
+                let prev_lower = chars[i - 1].is_lowercase() || chars[i - 1].is_ascii_digit();
+                let next_lower = i + 1 < len && chars[i + 1].is_lowercase();
+
+                // Split when transitioning from lowercase to uppercase (camelCase)
+                // or when an uppercase run ends (XMLParser → XML | Parser)
+                if prev_lower || (current.len() > 1 && next_lower) {
+                    words.push(std::mem::take(&mut current));
+                }
+            }
+            current.push(ch);
+        } else {
+            current.push(ch);
+        }
+    }
+
+    if !current.is_empty() {
+        words.push(current);
+    }
+
+    words
+}
+
 // ---------------------------------------------------------------------------
 // Implementation
 // ---------------------------------------------------------------------------
@@ -193,6 +391,13 @@ impl GraphStore {
 
     /// Insert or update a single code node.
     pub fn upsert_node(&self, node: &CodeNode) -> Result<()> {
+        let name_tokens = build_name_tokens(&node.name, node.qualified_name.as_deref());
+        let is_test = detect_is_test(
+            &node.name,
+            &node.file_path,
+            node.language.as_str(),
+            node.kind.as_str(),
+        );
         let mut stmt = self.conn.prepare_cached(UPSERT_NODE_SQL)?;
         stmt.execute(params![
             node.id,
@@ -207,6 +412,8 @@ impl GraphStore {
             node.documentation,            // doc_comment column
             compute_simple_hash(&node.id), // source_hash
             build_node_metadata(node),     // metadata JSON
+            name_tokens,                   // pre-split identifier tokens
+            is_test as i32,                // is_test flag
         ])?;
         Ok(())
     }
@@ -233,6 +440,13 @@ impl GraphStore {
         {
             let mut stmt = tx.prepare_cached(UPSERT_NODE_SQL)?;
             for node in nodes {
+                let name_tokens = build_name_tokens(&node.name, node.qualified_name.as_deref());
+                let is_test = detect_is_test(
+                    &node.name,
+                    &node.file_path,
+                    node.language.as_str(),
+                    node.kind.as_str(),
+                );
                 stmt.execute(params![
                     node.id,
                     node.kind.as_str(),
@@ -246,6 +460,8 @@ impl GraphStore {
                     node.documentation,
                     compute_simple_hash(&node.id),
                     build_node_metadata(node),
+                    name_tokens,
+                    is_test as i32,
                 ])?;
             }
         }
@@ -293,6 +509,13 @@ impl GraphStore {
             // Insert replacements.
             let mut ins_node = tx.prepare_cached(UPSERT_NODE_SQL)?;
             for node in nodes {
+                let name_tokens = build_name_tokens(&node.name, node.qualified_name.as_deref());
+                let is_test = detect_is_test(
+                    &node.name,
+                    &node.file_path,
+                    node.language.as_str(),
+                    node.kind.as_str(),
+                );
                 ins_node.execute(params![
                     node.id,
                     node.kind.as_str(),
@@ -306,6 +529,8 @@ impl GraphStore {
                     node.documentation,
                     compute_simple_hash(&node.id),
                     build_node_metadata(node),
+                    name_tokens,
+                    is_test as i32,
                 ])?;
             }
 
@@ -1635,5 +1860,516 @@ mod tests {
 
         let all = store.get_all_edges().unwrap();
         assert_eq!(all.len(), 3);
+    }
+
+    // -- split_identifier tests -------------------------------------------
+
+    #[test]
+    fn split_camel_case() {
+        assert_eq!(
+            split_identifier("getUserById"),
+            "getUserById get user by id"
+        );
+    }
+
+    #[test]
+    fn split_pascal_case() {
+        assert_eq!(
+            split_identifier("PaymentService"),
+            "PaymentService payment service"
+        );
+    }
+
+    #[test]
+    fn split_snake_case() {
+        assert_eq!(
+            split_identifier("process_user_input"),
+            "process_user_input process user input"
+        );
+    }
+
+    #[test]
+    fn split_screaming_snake() {
+        assert_eq!(
+            split_identifier("MAX_RETRY_COUNT"),
+            "MAX_RETRY_COUNT max retry count"
+        );
+    }
+
+    #[test]
+    fn split_single_word() {
+        // Single lowercase word — no splitting needed
+        assert_eq!(split_identifier("hello"), "hello");
+    }
+
+    #[test]
+    fn split_uppercase_acronym_followed_by_word() {
+        // XMLParser → XML | Parser
+        assert_eq!(split_identifier("XMLParser"), "XMLParser xml parser");
+    }
+
+    #[test]
+    fn split_mixed_acronym_camel() {
+        // getHTTPResponse → get | HTTP | Response
+        assert_eq!(
+            split_identifier("getHTTPResponse"),
+            "getHTTPResponse get http response"
+        );
+    }
+
+    #[test]
+    fn split_with_numbers() {
+        assert_eq!(
+            split_identifier("base64Encode"),
+            "base64Encode base64 encode"
+        );
+    }
+
+    #[test]
+    fn split_empty_string() {
+        assert_eq!(split_identifier(""), "");
+    }
+
+    #[test]
+    fn split_single_char() {
+        assert_eq!(split_identifier("x"), "x");
+    }
+
+    #[test]
+    fn split_all_uppercase() {
+        // A single all-caps word with no transitions
+        assert_eq!(split_identifier("URL"), "URL");
+    }
+
+    #[test]
+    fn build_name_tokens_simple() {
+        let result = build_name_tokens("findUser", None);
+        assert_eq!(result, "findUser find user");
+    }
+
+    #[test]
+    fn build_name_tokens_with_qualified_name() {
+        let result = build_name_tokens("findUser", Some("UserService.findUser"));
+        assert!(result.contains("findUser find user"));
+        assert!(result.contains("UserService user service"));
+    }
+
+    #[test]
+    fn build_name_tokens_qualified_same_as_name() {
+        // When qualified_name equals name, don't duplicate
+        let result = build_name_tokens("myFunc", Some("myFunc"));
+        assert_eq!(result, "myFunc my func");
+    }
+
+    #[test]
+    fn fts5_finds_camel_case_component() {
+        let store = setup();
+        let mut node = make_node("n1", "processUserInput", "a.ts", NodeKind::Function, 1);
+        node.qualified_name = None;
+        store.upsert_node(&node).unwrap();
+
+        // Search for a component word
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM fts_nodes WHERE fts_nodes MATCH '\"process\"'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "should find 'process' from 'processUserInput'");
+    }
+
+    #[test]
+    fn fts5_finds_snake_case_component() {
+        let store = setup();
+        let mut node = make_node("n1", "get_user_by_id", "a.ts", NodeKind::Function, 1);
+        node.qualified_name = None;
+        store.upsert_node(&node).unwrap();
+
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM fts_nodes WHERE fts_nodes MATCH '\"user\"'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "should find 'user' from 'get_user_by_id'");
+    }
+
+    #[test]
+    fn fts5_still_finds_original_name() {
+        let store = setup();
+        let mut node = make_node("n1", "getUserById", "a.ts", NodeKind::Function, 1);
+        node.qualified_name = None;
+        store.upsert_node(&node).unwrap();
+
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM fts_nodes WHERE fts_nodes MATCH '\"getUserById\"'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "original name should still be searchable");
+    }
+
+    // =====================================================================
+    // detect_is_test tests
+    // =====================================================================
+
+    // -- Rust --
+
+    #[test]
+    fn is_test_rust_test_prefix() {
+        assert!(detect_is_test(
+            "test_something",
+            "src/lib.rs",
+            "rust",
+            "function"
+        ));
+    }
+
+    #[test]
+    fn is_test_rust_test_dir() {
+        assert!(detect_is_test(
+            "my_func",
+            "src/tests/mod.rs",
+            "rust",
+            "function"
+        ));
+    }
+
+    #[test]
+    fn is_test_rust_test_file() {
+        assert!(detect_is_test(
+            "something",
+            "src/utils_test.rs",
+            "rust",
+            "function"
+        ));
+    }
+
+    #[test]
+    fn is_test_rust_regular_fn() {
+        assert!(!detect_is_test("do_work", "src/lib.rs", "rust", "function"));
+    }
+
+    // -- Python --
+
+    #[test]
+    fn is_test_python_test_prefix() {
+        assert!(detect_is_test(
+            "test_login",
+            "app/views.py",
+            "python",
+            "function"
+        ));
+    }
+
+    #[test]
+    fn is_test_python_test_class() {
+        assert!(detect_is_test(
+            "TestUserService",
+            "tests/test_user.py",
+            "python",
+            "class"
+        ));
+    }
+
+    #[test]
+    fn is_test_python_regular() {
+        assert!(!detect_is_test(
+            "process",
+            "app/utils.py",
+            "python",
+            "function"
+        ));
+    }
+
+    // -- TypeScript/JavaScript --
+
+    #[test]
+    fn is_test_ts_test_file() {
+        assert!(detect_is_test(
+            "someFunction",
+            "src/utils.test.ts",
+            "typescript",
+            "function"
+        ));
+    }
+
+    #[test]
+    fn is_test_ts_spec_file() {
+        assert!(detect_is_test(
+            "handleClick",
+            "src/button.spec.tsx",
+            "tsx",
+            "function"
+        ));
+    }
+
+    #[test]
+    fn is_test_ts_describe_call() {
+        assert!(detect_is_test(
+            "describe",
+            "src/utils.test.ts",
+            "typescript",
+            "function"
+        ));
+    }
+
+    #[test]
+    fn is_test_ts_regular() {
+        assert!(!detect_is_test(
+            "processData",
+            "src/utils.ts",
+            "typescript",
+            "function"
+        ));
+    }
+
+    #[test]
+    fn is_test_js_tests_dir() {
+        assert!(detect_is_test(
+            "testHelper",
+            "__tests__/helper.js",
+            "javascript",
+            "function"
+        ));
+    }
+
+    // -- Go --
+
+    #[test]
+    fn is_test_go_test_prefix() {
+        assert!(detect_is_test(
+            "TestCreateUser",
+            "user_test.go",
+            "go",
+            "function"
+        ));
+    }
+
+    #[test]
+    fn is_test_go_benchmark() {
+        assert!(detect_is_test(
+            "BenchmarkSort",
+            "sort_test.go",
+            "go",
+            "function"
+        ));
+    }
+
+    #[test]
+    fn is_test_go_test_file() {
+        assert!(detect_is_test("helper", "utils_test.go", "go", "function"));
+    }
+
+    #[test]
+    fn is_test_go_regular() {
+        assert!(!detect_is_test("CreateUser", "user.go", "go", "function"));
+    }
+
+    // -- Java --
+
+    #[test]
+    fn is_test_java_test_prefix() {
+        assert!(detect_is_test(
+            "testLogin",
+            "LoginTest.java",
+            "java",
+            "method"
+        ));
+    }
+
+    #[test]
+    fn is_test_java_test_class() {
+        assert!(detect_is_test(
+            "UserServiceTest",
+            "UserServiceTest.java",
+            "java",
+            "class"
+        ));
+    }
+
+    #[test]
+    fn is_test_java_regular() {
+        assert!(!detect_is_test("process", "Service.java", "java", "method"));
+    }
+
+    // -- Ruby --
+
+    #[test]
+    fn is_test_ruby_spec_file() {
+        assert!(detect_is_test(
+            "some_method",
+            "spec/models/user_spec.rb",
+            "ruby",
+            "method"
+        ));
+    }
+
+    #[test]
+    fn is_test_ruby_test_file() {
+        assert!(detect_is_test(
+            "test_login",
+            "test/user_test.rb",
+            "ruby",
+            "method"
+        ));
+    }
+
+    // -- General fallback --
+
+    #[test]
+    fn is_test_general_fallback_match() {
+        assert!(detect_is_test(
+            "testHelper",
+            "tests/helper.lua",
+            "lua",
+            "function"
+        ));
+    }
+
+    #[test]
+    fn is_test_general_fallback_no_match() {
+        assert!(!detect_is_test(
+            "process",
+            "src/main.lua",
+            "lua",
+            "function"
+        ));
+    }
+
+    // -- is_test column in database --
+
+    #[test]
+    fn upsert_node_sets_is_test_column() {
+        let store = setup();
+
+        // A test function
+        let test_node = make_node(
+            "t1",
+            "test_login",
+            "src/tests/auth.rs",
+            NodeKind::Function,
+            1,
+        );
+        store.upsert_node(&test_node).unwrap();
+
+        // A regular function
+        let regular_node = make_node("r1", "login", "src/auth.rs", NodeKind::Function, 1);
+        store.upsert_node(&regular_node).unwrap();
+
+        // Change test_node's language to Rust for proper detection
+        let mut test_node_rust =
+            make_node("t2", "test_something", "src/lib.rs", NodeKind::Function, 10);
+        test_node_rust.language = Language::Rust;
+        store.upsert_node(&test_node_rust).unwrap();
+
+        // Check is_test values in DB
+        let is_test_t2: i32 = store
+            .conn
+            .query_row("SELECT is_test FROM nodes WHERE id = 't2'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(is_test_t2, 1, "test_something should be is_test=1");
+
+        let is_test_r1: i32 = store
+            .conn
+            .query_row("SELECT is_test FROM nodes WHERE id = 'r1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(is_test_r1, 0, "login should be is_test=0");
+    }
+
+    #[test]
+    fn upsert_nodes_batch_sets_is_test() {
+        let store = setup();
+
+        let nodes = vec![
+            make_node(
+                "t1",
+                "test_add",
+                "tests/math_test.py",
+                NodeKind::Function,
+                1,
+            ),
+            make_node("r1", "add", "src/math.py", NodeKind::Function, 1),
+        ];
+        // Override language to Python for proper detection
+        let py_nodes: Vec<CodeNode> = nodes
+            .into_iter()
+            .map(|mut n| {
+                n.language = Language::Python;
+                n
+            })
+            .collect();
+        store.upsert_nodes(&py_nodes).unwrap();
+
+        let test_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM nodes WHERE is_test = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(test_count, 1, "only test_add should be is_test=1");
+
+        let non_test_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM nodes WHERE is_test = 0", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(non_test_count, 1);
+    }
+
+    #[test]
+    fn query_is_test_nodes() {
+        let store = setup();
+
+        // Insert mix of test and non-test nodes
+        let mut test_fn = make_node(
+            "t1",
+            "TestCreateUser",
+            "user_test.go",
+            NodeKind::Function,
+            1,
+        );
+        test_fn.language = Language::Go;
+        let mut regular_fn = make_node("r1", "CreateUser", "user.go", NodeKind::Function, 1);
+        regular_fn.language = Language::Go;
+        let mut test_fn2 = make_node(
+            "t2",
+            "TestDeleteUser",
+            "user_test.go",
+            NodeKind::Function,
+            10,
+        );
+        test_fn2.language = Language::Go;
+
+        store
+            .upsert_nodes(&[test_fn, regular_fn, test_fn2])
+            .unwrap();
+
+        // Query only test nodes
+        let mut stmt = store
+            .conn
+            .prepare("SELECT id FROM nodes WHERE is_test = 1 ORDER BY id")
+            .unwrap();
+        let ids: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"t1".to_string()));
+        assert!(ids.contains(&"t2".to_string()));
     }
 }

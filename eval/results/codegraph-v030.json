@@ -1,0 +1,43 @@
+{
+  "version": "0.3.0",
+  "timestamp": "2026-02-08T13:20:08Z",
+  "database": {
+    "files": 83,
+    "nodes": 7383,
+    "edges": 11969,
+    "node_count_ok": true,
+    "edge_count_ok": true
+  },
+  "search_metrics": {
+    "queries": 15,
+    "precision": 0.233,
+    "recall": 0.463,
+    "f1": 0.294,
+    "mrr": 0.631
+  },
+  "caller_metrics": {
+    "callees_tested": 8,
+    "precision": 0.392,
+    "recall": 0.688,
+    "f1": 0.407
+  },
+  "dead_code_metrics": {
+    "note": "N/A for Rust self-evaluation (designed for JS/TS import-based dead code)",
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0
+  },
+  "dependency_metrics": {
+    "note": "N/A for Rust self-evaluation (designed for JS/TS file-level imports)",
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0
+  },
+  "overall_applicable": {
+    "note": "Average of search + caller metrics (the two applicable categories for Rust codebase)",
+    "precision": 0.313,
+    "recall": 0.576,
+    "f1": 0.351,
+    "mrr": 0.631
+  }
+}

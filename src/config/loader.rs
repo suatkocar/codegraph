@@ -240,6 +240,11 @@ fn merge_configs(mut base: CodeGraphConfig, overlay: CodeGraphConfig) -> CodeGra
         base.performance.exclude_tests = true;
     }
 
+    // Contexts — overlay keys win
+    for (path, desc) in overlay.contexts {
+        base.contexts.insert(path, desc);
+    }
+
     base
 }
 
@@ -1037,5 +1042,78 @@ tools:
         load_env_overrides(&mut config);
         pa_eq!(config.preset, PresetName::Full); // unchanged
         std::env::remove_var("CODEGRAPH_PRESET");
+    }
+
+    // --- merge_configs: contexts ---
+
+    #[test]
+    fn merge_contexts_overlay_wins() {
+        let mut base = CodeGraphConfig::default();
+        base.contexts
+            .insert("src/legacy".into(), "Old context".into());
+        base.contexts
+            .insert("src/shared".into(), "Shared utils".into());
+
+        let mut overlay = CodeGraphConfig::default();
+        overlay
+            .contexts
+            .insert("src/legacy".into(), "Updated context".into());
+        overlay
+            .contexts
+            .insert("tests/".into(), "Test files".into());
+
+        let merged = merge_configs(base, overlay);
+        pa_eq!(merged.contexts.len(), 3);
+        pa_eq!(
+            merged.contexts.get("src/legacy").map(|s| s.as_str()),
+            Some("Updated context")
+        );
+        pa_eq!(
+            merged.contexts.get("src/shared").map(|s| s.as_str()),
+            Some("Shared utils")
+        );
+        pa_eq!(
+            merged.contexts.get("tests/").map(|s| s.as_str()),
+            Some("Test files")
+        );
+    }
+
+    #[test]
+    fn merge_empty_contexts_preserves_base() {
+        let mut base = CodeGraphConfig::default();
+        base.contexts.insert("src".into(), "Source".into());
+        let overlay = CodeGraphConfig::default(); // empty contexts
+        let merged = merge_configs(base, overlay);
+        pa_eq!(merged.contexts.len(), 1);
+        pa_eq!(
+            merged.contexts.get("src").map(|s| s.as_str()),
+            Some("Source")
+        );
+    }
+
+    #[test]
+    fn load_project_config_with_contexts() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join(".codegraph.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+contexts:
+  "src/legacy": "Deprecated v1 API"
+  "src/services/auth": "Auth service"
+"#,
+        )
+        .unwrap();
+
+        let config = load_project_config(dir.path()).unwrap();
+        pa_eq!(config.contexts.len(), 2);
+        pa_eq!(
+            config.get_context_for_path("src/legacy/old.ts"),
+            Some("Deprecated v1 API")
+        );
+        pa_eq!(
+            config.get_context_for_path("src/services/auth/login.ts"),
+            Some("Auth service")
+        );
     }
 }

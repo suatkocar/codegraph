@@ -1,13 +1,18 @@
 [package]
 name = "codegraph"
-version = "0.2.5"
+version = "0.3.0"
 edition = "2021"
 authors = ["Suat Kocar"]
-description = "Codebase intelligence MCP server — 32 languages, 44 tools, semantic code graph"
+description = "Codebase intelligence MCP server — 32 languages, 46 tools, semantic code graph"
 license = "MIT"
 repository = "https://github.com/suatkocar/codegraph"
 keywords = ["mcp", "claude", "code-intelligence", "tree-sitter", "semantic-search"]
 categories = ["development-tools", "command-line-utilities"]
+
+[lib]
+name = "codegraph"
+path = "src/lib.rs"
+crate-type = ["rlib"]
 
 [[bin]]
 name = "codegraph"
@@ -63,8 +68,10 @@ tree-sitter-nix = "0.3"
 fastembed = { version = "4", optional = true }
 
 # MCP Server
-rmcp = { version = "0.1", features = ["server", "transport-io"] }
-tokio = { version = "1", features = ["rt", "macros", "io-std", "signal"] }
+rmcp = { version = "0.14", features = ["server", "transport-io", "transport-streamable-http-server", "transport-streamable-http-server-session"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "io-std", "signal", "net"] }
+axum = "0.8"
+futures = "0.3"
 schemars = "1.0"
 
 # CLI
@@ -100,6 +107,7 @@ chrono = "0.4"
 [features]
 default = ["embedding"]
 embedding = ["dep:fastembed"]
+reranking = ["embedding"]
 
 [profile.release]
 opt-level = 3
